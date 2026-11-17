@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>云海 2.0 · Cloud Sea</title>
+  <link rel="stylesheet" href="src/style.css">
+</head>
+<body>
+  <main id="app">
+    <section id="stage" aria-label="云海列车">
+      <canvas id="gl" aria-label="云海中的蒸汽列车动画"></canvas>
+
+      <header class="scene-heading">
+        <small>A JOURNEY INTO THE SOUL</small>
+        <h1>Up in the Cloud Sea</h1>
+        <p>云海列车 · 让风随云而行</p>
+      </header>
+
+      <p class="hint" id="train-hint">长按画面蓄力，松开让列车离开轨道</p>
+
+      <div id="charge" hidden aria-hidden="true"><div id="charge-fill"></div></div>
+
+
+      <div id="status" role="status">正在绘制云海…</div>
+
+      <div id="hud" aria-label="控制面板">
+        <button id="pause" type="button" aria-pressed="false">暂停</button>
+        <button id="reset" type="button">重置</button>
+        <label>主题
+          <select id="theme" aria-label="主题皮肤"></select>
+        </label>
+        <label>天气
+          <select id="weather" aria-label="天气">
+            <option value="sunny">晴</option>
+            <option value="rain">大雨</option>
+            <option value="snow">大雪</option>
+            <option value="storm">雷暴</option>
+          </select>
+        </label>
+        <label>画质
+          <select id="quality">
+            <option value="auto" selected>自动</option>
+            <option value="0.5">流畅</option>
+            <option value="1">标准</option>
+            <option value="2">高清</option>
+          </select>
+        </label>
+        <label class="speed">速度
+          <input id="speed" type="range" min="0" max="3" step="0.05" value="1" aria-label="时间速度">
+          <output id="speed-value" for="speed">1.00×</output>
+        </label>
+        <button id="full" type="button">全屏</button>
+        <span id="time">00:00</span>
+        <span id="fps" aria-live="off">-- fps</span>
+      </div>
+
+      <div id="bench" hidden></div>
+    </section>
+  </main>
+  <script type="module" src="src/main.js"></script>
+</body>
+</html>

@@ -1,0 +1,266 @@
+// 合成 pass（全分辨率）：半分辨率云图 + 城市剪影 + 列车 + 烟 + 桥 + 前景云 + 粒子
+// iChannel0 = 天空/背景云，iChannel1 = 前景云（带 alpha）
+
+uniform vec3 uTrainBody;
+uniform vec3 uTrainRoof;
+uniform vec3 uTrainTrim;
+uniform vec3 uTrainEmissive;
+uniform float uEmissiveEnergy;
+uniform vec3 uSmokeA;
+uniform vec3 uSmokeB;
+uniform float uSmokeStrength;
+uniform vec3 uBridgeColor;
+
+uniform float uCityEnabled;
+uniform vec3 uCityColor;
+uniform vec3 uCityWindow;
+
+uniform vec3 uParticleColor;
+uniform float uParticleDensity;
+uniform float uParticleSpeed;
+uniform float uWeatherParticleMul;
+uniform float uParticleDir;
+uniform float uWeatherParticleSpeed;
+uniform float uWeatherParticleDriftX;
+uniform float uWeatherParticleShape;
+uniform float uWeatherParticleSize;
+uniform float uWeatherParticleMix;
+uniform vec3 uWeatherParticleColor;
+
+// 降水与龙卷
+uniform float uPrecipType;   // 0 无 / 1 雨 / 2 雪
+uniform float uPrecipAmount;
+uniform float uWindSlant;
+uniform float uTornado;
+uniform vec2 uTornadoPos;
+
+uniform vec2 uParallax;
+uniform float uScanline;
+
+// 列车操控：位移 / 烟淡出 / 轨道淡出
+uniform vec2 uTrainOffset;
+uniform float uTrainScale;
+uniform float uSmokeFade;
+uniform float uRailFade;
+
+// 国风：车厢木纹 + 仙鹤
+uniform float uTrainGrain;
+uniform float uCraneEnabled;
+uniform vec3 uCraneColor;
+
+// 极地：车顶积雪
+uniform float uSnowCover;
+uniform vec3 uSnowColor;
+
+float hash21(vec2 p) {
+    vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
+}
+
+// 城市：每层就是一列"楼"，楼高按列哈希；窗光细分到每栋楼 4 列。
+vec2 cityLayer(vec2 uv, float cells, float baseY, float height, float seed, float parallax) {
+    vec2 p = vec2(uv.x * cells + parallax * cells, uv.y - baseY);
+    float column = floor(p.x);
+    float hh = hash21(vec2(column, seed));
+    float h = height * (0.12 + 0.88 * hh * hh);
+    float gap = step(0.18, hash21(vec2(column, seed + 4.7)));
+    float body = step(0.0, p.y) * step(p.y, h) * gap;
+
+    vec2 w = vec2(fract(p.x) * 4.0, p.y * 26.0);
+    float cellHash = hash21(vec2(column * 4.0 + floor(w.x), floor(w.y)) + seed);
+    float win = step(0.52, cellHash);
+    win *= step(0.22, fract(w.x)) * step(fract(w.x), 0.78);
+    win *= step(0.30, fract(w.y)) * step(fract(w.y), 0.74);
+    return vec2(body, body * win);
+}
+
+vec3 cityComposite(vec3 col, vec2 uv) {
+    vec2 far = cityLayer(uv, 34.0, 0.42, 0.10, 11.3, uParallax.x * 0.010);
+    vec2 mid = cityLayer(uv, 22.0, 0.38, 0.13, 7.7, uParallax.x * 0.020);
+    vec2 near = cityLayer(uv, 14.0, 0.34, 0.16, 3.1, uParallax.x * 0.035);
+
+    float mask = max(near.x, max(mid.x * 0.92, far.x * 0.78));
+    float win = max(near.y, max(mid.y * 0.8, far.y * 0.55));
+
+    vec3 outCol = mix(col, uCityColor, mask);
+    outCol += uCityWindow * win * 0.42;
+    outCol += uCityWindow * mask * 0.035;
+    return outCol;
+}
+
+// 暴雨：三层不同速度/斜率的雨丝
+float rainField(vec2 uv, float t, float slant) {
+    float acc = 0.0;
+    for (int i = 0; i < 3; i++) {
+        float k = float(i);
+        float cells = 26.0 * (1.0 + k * 0.55);
+        vec2 p = vec2(uv.x * cells + t * slant * (0.35 + k * 0.45),
+                      uv.y * cells * 0.5 - t * (9.0 + k * 7.0));
+        vec2 cell = floor(p);
+        vec2 f = fract(p) - 0.5;
+        float h = hash21(cell + k * 7.0);
+        float alive = step(0.62, h);
+        float streak = smoothstep(0.055, 0.0, abs(f.x + f.y * slant * 0.18))
+                     * smoothstep(0.5, 0.15, abs(f.y));
+        acc += alive * streak * (0.62 - k * 0.14);
+    }
+    return acc;
+}
+
+// 暴雪：三层不同大小的雪花，缓慢下落 + 横向摆动
+float snowField(vec2 uv, float t) {
+    float acc = 0.0;
+    for (int i = 0; i < 3; i++) {
+        float k = float(i);
+        float cells = 16.0 * (1.0 + k * 0.7);
+        vec2 p = vec2(uv.x * cells + sin(uv.y * 4.0 + t * 0.9 + k * 2.0) * 0.45,
+                      uv.y * cells * 0.75 - t * (1.4 + k * 1.1));
+        vec2 cell = floor(p);
+        vec2 f = fract(p) - 0.5;
+        float h = hash21(cell + k * 13.0);
+        float alive = step(0.58, h);
+        float d = length(f);
+        acc += alive * smoothstep(0.26 + k * 0.05, 0.0, d) * (0.7 - k * 0.15);
+    }
+    return acc;
+}
+
+// 龙卷漏斗：下窄上宽的灰柱 + 竖直流动条纹
+float funnelMask(vec2 uv, vec2 center, float t) {
+    float y = uv.y - center.y;
+    if (y < 0.0) return 0.0;
+    float w = 0.045 + y * 0.19;
+    float wobble = 0.02 * sin(y * 16.0 + t * 2.2);
+    float x = abs(uv.x - center.x + wobble);
+    float body = smoothstep(w, w * 0.55, x) * smoothstep(0.8, 0.05, y);
+    float streak = 0.55 + 0.45 * hash21(vec2(floor(uv.x * 70.0), floor(uv.y * 46.0 - t * 6.0)));
+    float rim = exp(-abs(x - w) * 70.0) * 0.5 * smoothstep(0.8, 0.1, y);
+    return body * streak + rim;
+}
+
+float particleField(vec2 uv, float t) {
+    vec2 p = vec2(uv.x * 20.0 + t * uWeatherParticleDriftX, uv.y * 11.0 - t * 0.5 * uParticleDir * uWeatherParticleSpeed);
+    vec2 cell = floor(p);
+    vec2 f = fract(p) - 0.5;
+    float h = hash21(cell);
+    float alive = step(0.93, h);
+    vec2 offset = vec2((h - 0.5) * 0.5, 0.0);
+    vec2 aniso = mix(vec2(7.0, 2.4), vec2(1.5, 1.5), uWeatherParticleShape);
+    float d = length((f - offset) * aniso);
+    float twinkle = 0.45 + 0.55 * sin(t * 2.0 + h * 40.0);
+    return alive * smoothstep(0.30 * uWeatherParticleSize, 0.0, d) * twinkle;
+}
+
+// 仙鹤：一只振翅的 V 形 + 一点身体，远看就是水墨里的飞鸟
+float craneField(vec2 uv, float t) {
+    float acc = 0.0;
+    for (int i = 0; i < 2; i++) {
+        float fi = float(i);
+        vec2 center = vec2(0.16 + 0.62 * fract(t * 0.005 + fi * 0.51),
+                           0.70 + 0.04 * sin(t * 0.32 + fi * 2.1));
+        vec2 p = (uv - center) * vec2(1.0, 1.8);
+        float flap = sin(t * 4.5 + fi * 1.7);
+        float wing = smoothstep(0.007, 0.0, abs(p.y - (0.05 + 0.13 * flap) * abs(p.x)));
+        wing *= step(abs(p.x), 0.055);
+        float body = smoothstep(0.010, 0.0, length(p * vec2(1.0, 2.6)));
+        acc = max(acc, max(wing, body));
+    }
+    return acc;
+}
+
+void mainImage( out vec4 fragColor, in vec2 fragCoord )
+{
+    vec2 uv = fragCoord / iResolution.y;
+    float t = iTime * 4.0;
+
+    vec3 col = texture(iChannel0, fragCoord / iResolution.xy).rgb;
+
+    // 龙卷：灰色漏斗 + 周围压暗
+    if (uTornado > 0.001) {
+        float f = funnelMask(uv, uTornadoPos, iTime);
+        col = mix(col, vec3(0.50, 0.48, 0.53), f * 0.72 * uTornado);
+        col *= 1.0 - 0.34 * uTornado * smoothstep(0.52, 0.0, length((uv - uTornadoPos) * vec2(1.0, 0.7)));
+    }
+
+    // 城市剪影：压在云海之上、列车与前景云之下
+    if (uCityEnabled > 0.5) col = cityComposite(col, uv);
+
+    // ---- 列车 / 烟 / 桥 ----
+    // 以列车中心为轴缩放：飞行时放大，离开轨道后仍可辨认
+    vec2 trainCenter = vec2(0.24, 0.315);
+    vec2 tuv = (uv - trainCenter - uTrainOffset) / uTrainScale + trainCenter;
+    tuv.y -= 0.2;
+    TrainMasks train = productionTrainMasks(tuv);
+    col = mix(col, uTrainRoof, train.joinMask);
+    col = mix(col, uTrainBody, train.wagon);
+    col = mix(col, uTrainRoof, train.roof);
+
+    col = mix(col, uTrainTrim, train.locomotive);
+    col = mix(col, uTrainTrim, train.chimneyBody);
+    col = mix(col, uTrainRoof, train.locomotiveRoof);
+    col = mix(col, uTrainRoof, train.chimneyTop + train.wheels);
+
+    // 木纹：只作用在车身上（经典主题 grain=0 → 无变化）
+    if (uTrainGrain > 0.001) {
+        float g = fbm(tuv * vec2(90.0, 14.0), 3);
+        col *= mix(1.0, 0.80 + 0.40 * g, uTrainGrain * max(train.wagon, train.locomotive));
+    }
+
+    // 积雪：盖住车顶与车厢上沿，边缘用噪声打碎（极地主题 snow=1）
+    if (uSnowCover > 0.001) {
+        float capNoise = fbm(tuv * vec2(38.0, 90.0), 3);
+        float cap = smoothstep(0.104, 0.117, tuv.y) * max(train.wagon, train.roof);
+        cap *= smoothstep(0.34, 0.56, capNoise);
+        col = mix(col, uSnowColor, cap * uSnowCover);
+    }
+
+    // 霓虹灯带 + 光晕 + 车头光（经典主题 energy=0 → 无效果）
+    float neon = step(0.103, tuv.y) * step(tuv.y, 0.109) * step(tuv.x, 0.45);
+    neon *= step(0.5, train.wagon);
+    col += uTrainEmissive * neon * uEmissiveEnergy;
+
+    float halo = exp(-abs(tuv.y - 0.106) * 55.0) * step(tuv.x, 0.46) * step(0.5, train.wagon);
+    col += uTrainEmissive * halo * uEmissiveEnergy * 0.22;
+
+    float head = length((tuv - vec2(0.492, 0.116)) * vec2(1.0, 1.7));
+    col += uTrainEmissive * exp(-head * 60.0) * uEmissiveEnergy * 0.65;
+
+    if(tuv.x < 0.49){
+        float y = productionSmokeDistance(tuv, t);
+        if(y < 0.0) col = mix(col, uSmokeA, uSmokeStrength * uSmokeFade);
+        if(y < - 0.02) col = mix(col, uSmokeB, uSmokeStrength * uSmokeFade);
+    }
+
+    // 桥固定在原地：不跟随列车位移
+    vec2 buv = uv;
+    buv.y -= 0.2;
+    float bridgeKeep = productionBridgeKeepMask(buv, t);
+    // uRailFade 是桥的不透明度：1 = 原样，0.45 = 飞行时淡化
+    col = mix(col, uBridgeColor * smoothstep(-0.08, 0.08, buv.y), (1.0 - bridgeKeep) * uRailFade);
+
+    // 前景云（半分辨率上采样）
+    vec4 fg = texture(iChannel1, fragCoord / iResolution.xy);
+    col = mix(col, fg.rgb, fg.a);
+
+    // 仙鹤（云前）
+    if (uCraneEnabled > 0.5) col = mix(col, uCraneColor, craneField(uv, t) * 0.9);
+
+    // 降水：暴雨/暴雪直接覆在画面最前层（除粒子外）
+    if (uPrecipAmount > 0.001) {
+        if (uPrecipType > 1.5) {
+            float snow = snowField(uv, iTime);
+            col = mix(col, vec3(0.97, 0.99, 1.0), clamp(snow * uPrecipAmount * 0.9, 0.0, 0.9));
+        } else {
+            float rain = rainField(uv, iTime, uWindSlant);
+            col = mix(col, vec3(0.70, 0.84, 0.98), clamp(rain * uPrecipAmount * 0.85, 0.0, 0.85));
+        }
+    }
+
+    // 粒子与扫描线
+    vec3 particleColor = mix(uParticleColor, uWeatherParticleColor, uWeatherParticleMix);
+    col += particleColor * particleField(uv + uParallax * 0.008, iTime * uParticleSpeed) * uParticleDensity * uWeatherParticleMul;
+    col *= 1.0 - uScanline * 0.12 * step(0.5, fract(gl_FragCoord.y * 0.5));
+
+    fragColor = vec4(col, 1.0);
+}

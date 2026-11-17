@@ -1,0 +1,15 @@
+# 依赖 / 生成物
+node_modules/
+dist/
+
+# 自检产物
+shots/verify/
+*.log
+
+# 浏览器临时 profile
+.edge-profile*/
+.edge-*/
+
+# 系统
+Thumbs.db
+.DS_Store
