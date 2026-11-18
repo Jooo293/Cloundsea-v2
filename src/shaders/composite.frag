@@ -144,7 +144,7 @@ float snowField(vec2 uv, float t) {
 // 龙卷：下窄上宽的螺旋柱 + 底部尘幕
 float tornadoBody(vec2 uv, vec2 c, float t) {
     vec2 p = uv - c;
-    float hgt = clamp(p.y / 0.58, 0.0, 1.0);
+    float hgt = clamp(p.y / 0.86, 0.0, 1.0);
     float width = 0.024 + 0.155 * pow(hgt, 1.9);   // 底部窄、顶部张开成喇叭口
     float sway = 0.035 * sin(p.y * 6.0 + t * 1.4);
     float x = abs(p.x - sway);
@@ -161,7 +161,10 @@ float tornadoBody(vec2 uv, vec2 c, float t) {
     float skirt = exp(-pow((p.y - 0.005) * 13.0, 2.0)) * smoothstep(0.22, 0.0, abs(p.x)) * 0.6;
 
 
-    return clamp(body + skirt, 0.0, 1.0) * step(-0.06, p.y) * smoothstep(0.62, 0.2, p.y);
+    // 顶部渐隐：smoothstep(edge0>edge1) 在 GLSL 里是未定义行为，
+    // 之前造成一条硬切边；这里用 1 - smoothstep 保证单调
+    float profile = step(-0.06, p.y) * (1.0 - smoothstep(0.30, 0.74, p.y));
+    return clamp(body * 0.94 + skirt, 0.0, 1.0) * profile;
 }
 
 // 龙卷碎屑：软边圆点，按格哈希随机偏移与相位（不再是整格亮灭的方块阵）
@@ -181,8 +184,9 @@ float tornadoDebris(vec2 uv, vec2 c, float t) {
         float alive = step(0.45, h1);
 
         // 每颗在格内绕小圈漂移，半径随时间伸缩（被甩出去又卷回来）
-        float ang = t * (0.7 + h2 * 1.3) + h1 * 6.2831;
-        float orbit = 0.10 + 0.22 * h2 + 0.10 * sin(t * 0.9 + h3 * 6.28);
+        // 统一角速度（同一旋转方向），只有相位差
+        float ang = t * 1.15 + h1 * 6.2831;
+        float orbit = 0.12 + 0.20 * h2 + 0.08 * sin(t * 0.9 + h1 * 6.28);
         vec2 offset = vec2(cos(ang), sin(ang)) * orbit;
 
         float d = length(f - offset);
