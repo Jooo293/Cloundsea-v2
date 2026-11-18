@@ -141,17 +141,30 @@ float snowField(vec2 uv, float t) {
     return acc;
 }
 
-// 龙卷漏斗：下窄上宽的灰柱 + 竖直流动条纹
-float funnelMask(vec2 uv, vec2 center, float t) {
-    float y = uv.y - center.y;
-    if (y < 0.0) return 0.0;
-    float w = 0.045 + y * 0.19;
-    float wobble = 0.02 * sin(y * 16.0 + t * 2.2);
-    float x = abs(uv.x - center.x + wobble);
-    float body = smoothstep(w, w * 0.55, x) * smoothstep(0.8, 0.05, y);
-    float streak = 0.55 + 0.45 * hash21(vec2(floor(uv.x * 70.0), floor(uv.y * 46.0 - t * 6.0)));
-    float rim = exp(-abs(x - w) * 70.0) * 0.5 * smoothstep(0.8, 0.1, y);
-    return body * streak + rim;
+// 龙卷：下窄上宽的螺旋柱 + 底部尘幕
+float tornadoBody(vec2 uv, vec2 c, float t) {
+    vec2 p = uv - c;
+    float hgt = clamp(p.y / 0.58, 0.0, 1.0);
+    float width = 0.026 + 0.125 * pow(hgt, 1.6);
+    float sway = 0.035 * sin(p.y * 6.0 + t * 1.4);
+    float x = abs(p.x - sway);
+    float body = smoothstep(width, width * 0.5, x);
+
+    // 旋转条纹：角度 + 高度 + 时间
+    float ang = atan(p.x - sway, p.y + 1e-3);
+    float spiral = 0.5 + 0.5 * sin(ang * 4.0 + p.y * 30.0 - t * 9.0);
+    body *= 0.45 + 0.55 * spiral;
+    // 细密的竖直流线，避免"一根光滑圆柱"
+    body *= 0.72 + 0.28 * sin(p.x * 110.0 + p.y * 18.0 - t * 14.0);
+
+    // 底部尘幕：贴着云海铺开一圈
+    float skirt = exp(-pow((p.y - 0.005) * 13.0, 2.0)) * smoothstep(0.22, 0.0, abs(p.x)) * 0.6;
+    // 被卷起的碎屑
+    float debris = step(0.86, hash21(floor((p + vec2(0.0, t * 0.05)) * 46.0)))
+                 * smoothstep(0.20, 0.0, abs(p.x)) * smoothstep(0.22, 0.02, p.y) * 0.8;
+    skirt += debris;
+
+    return clamp(body + skirt, 0.0, 1.0) * step(-0.06, p.y) * smoothstep(0.62, 0.2, p.y);
 }
 
 float particleField(vec2 uv, float t) {
@@ -192,11 +205,13 @@ void mainImage( out vec4 fragColor, in vec2 fragCoord )
     vec4 cloudTexel = texture(iChannel0, fragCoord / iResolution.xy);
     vec3 col = cloudTexel.rgb;
 
-    // 龙卷：灰色漏斗 + 周围压暗
+    // 龙卷：亮灰螺旋柱 + 边缘高光 + 附近压暗（吸走光）
     if (uTornado > 0.001) {
-        float f = funnelMask(uv, uTornadoPos, iTime);
-        col = mix(col, vec3(0.50, 0.48, 0.53), f * 0.72 * uTornado);
-        col *= 1.0 - 0.34 * uTornado * smoothstep(0.52, 0.0, length((uv - uTornadoPos) * vec2(1.0, 0.7)));
+        float f = tornadoBody(uv, uTornadoPos, iTime);
+        vec3 tornadoColor = vec3(0.74, 0.72, 0.78);
+        col = mix(col, tornadoColor, f * 0.88 * uTornado);
+        col += vec3(0.26, 0.26, 0.30) * f * f * uTornado;
+        col *= 1.0 - 0.38 * uTornado * smoothstep(0.55, 0.0, length((uv - uTornadoPos) * vec2(1.0, 0.65)));
     }
 
     // 城市剪影：压在云海之上、列车与前景云之下

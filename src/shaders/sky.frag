@@ -64,7 +64,7 @@ vec3 paletteColor(int index) {
     return texelFetch(uPalette, ivec2(index, 0), 0).rgb;
 }
 
-vec4 background(vec2 uv, float t, vec2 warpOffset) {
+vec4 background(vec2 uv, float t, vec2 warpOffset, float carveDelta) {
     for (int i = 0; i < MAX_BG_LAYERS; i++) {
         if (i >= uLayerCount) break;
 
@@ -74,17 +74,21 @@ vec4 background(vec2 uv, float t, vec2 warpOffset) {
         if (uTornado > 0.001) {
             vec2 d = samplePosition - uTornadoPos;
             float r = length(d) + 1e-4;
-            float ang = uTornado * 4.2 * exp(-r * 1.9);
+            float ang = uTornado * 5.5 * exp(-r * 2.0);
             float c = cos(ang);
             float sn = sin(ang);
-            samplePosition = uTornadoPos
-                + vec2(c * d.x - sn * d.y, sn * d.x + c * d.y)
-                - d / r * 0.09 * uTornado * exp(-r * 2.6);
+            vec2 swirled = vec2(c * d.x - sn * d.y, sn * d.x + c * d.y);
+            // 向心拉拽 + 切向拉伸：云被吸进漩涡再甩出去
+            samplePosition = uTornadoPos + swirled
+                - d / r * 0.10 * uTornado * exp(-r * 2.4)
+                + vec2(-d.y, d.x) / r * 0.07 * uTornado * exp(-pow((r - 0.16) * 5.0, 2.0));
         }
 
         float n = fbm(samplePosition, 8);
         n = mix(n, 1.0 - abs(n * 2.0 - 1.0), uRidge);
         float h = (n - 0.5) * spec.y;
+
+        h += carveDelta;   // 龙卷挖空（每像素只算一次，见 mainImage）
 
         // 列车拨云：椭圆核下压 + 环状隆起，做出"被排开"的边界
         if (uCarveDepth > 0.0001) {
@@ -185,7 +189,16 @@ void mainImage( out vec4 fragColor, in vec2 fragCoord )
         warpOffset = vec2(wa - 0.5, wb - 0.5) * uWarp;
     }
 
-    vec4 bg = background(uv, t, warpOffset);
+    // 龙卷挖空：每帧每像素只算一次，循环里只加一个标量
+    float carveDelta = 0.0;
+    if (uTornado > 0.001) {
+        vec2 td = (uv - uTornadoPos) * vec2(0.80, 1.0);
+        float tr = length(td);
+        carveDelta = -smoothstep(0.26, 0.0, tr) * 1.45 * uTornado
+                   + exp(-pow((tr - 0.27) * 8.0, 2.0)) * 0.38 * uTornado;
+    }
+
+    vec4 bg = background(uv, t, warpOffset, carveDelta);
     vec3 col = mix(sky, bg.rgb, bg.a);
 
     if (uWeatherActive > 0.5) {
