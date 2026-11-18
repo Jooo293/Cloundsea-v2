@@ -216,5 +216,6 @@ void mainImage( out vec4 fragColor, in vec2 fragCoord )
         col = mix(col, uInkColor, edge * uInkEdge * (0.35 + 0.65 * dry));
     }
 
-    fragColor = vec4(col, 1.0);
+    // alpha = 云覆盖率（1 云 / 0 天空），供降水做遮挡
+    fragColor = vec4(col, bg.a);
 }

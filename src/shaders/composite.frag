@@ -188,7 +188,8 @@ void mainImage( out vec4 fragColor, in vec2 fragCoord )
     vec2 uv = fragCoord / iResolution.y;
     float t = iTime * 4.0;
 
-    vec3 col = texture(iChannel0, fragCoord / iResolution.xy).rgb;
+    vec4 cloudTexel = texture(iChannel0, fragCoord / iResolution.xy);
+    vec3 col = cloudTexel.rgb;
 
     // 龙卷：灰色漏斗 + 周围压暗
     if (uTornado > 0.001) {
@@ -264,13 +265,16 @@ void mainImage( out vec4 fragColor, in vec2 fragCoord )
     if (uPrecipAmount > 0.001) {
         if (uPrecipType > 1.5) {
             float snow = snowField(uv, iTime);
-            col = mix(col, vec3(0.97, 0.99, 1.0), clamp(snow * uPrecipAmount * 0.9, 0.0, 0.9));
+            float snowVis = mix(1.0, 0.70, fg.a) * mix(0.80, 1.0, 1.0 - cloudTexel.a);
+            col = mix(col, vec3(0.97, 0.99, 1.0), clamp(snow * uPrecipAmount * snowVis * 0.9, 0.0, 0.9));
         } else {
             float rain = rainField(uv, iTime, uWindSlant);
             // 雨色采样背景：60% 揉进当前画面，再按背景亮度提亮，避免"浮在最上层的白条"
             vec3 rainTint = mix(vec3(0.80, 0.88, 0.98), col * 1.35 + 0.02, 0.45);
             float lum = dot(col, vec3(0.299, 0.587, 0.114));
-            float vis = clamp(rain * uPrecipAmount * (0.80 + 0.60 * lum), 0.0, 0.9);
+            // 遮挡：前景雾挡掉大部分雨；天空缝隙里雨更清楚
+            float rainVis = mix(1.0, 0.55, fg.a) * mix(0.70, 1.0, 1.0 - cloudTexel.a);
+            float vis = clamp(rain * uPrecipAmount * rainVis * (0.80 + 0.60 * lum), 0.0, 0.9);
             col = mix(col, rainTint, vis);
             col += rain * 0.09 * (0.35 + lum);
         }
