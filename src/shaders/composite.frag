@@ -155,16 +155,43 @@ float tornadoBody(vec2 uv, vec2 c, float t) {
     float spiral = 0.5 + 0.5 * sin(ang * 4.0 + p.y * 30.0 - t * 9.0);
     body *= 0.45 + 0.55 * spiral;
     // 细密的竖直流线，避免"一根光滑圆柱"
-    body *= 0.72 + 0.28 * sin(p.x * 110.0 + p.y * 18.0 - t * 14.0);
+    body *= 0.78 + 0.22 * sin(p.x * 58.0 + p.y * 12.0 - t * 10.0);
 
     // 底部尘幕：贴着云海铺开一圈
     float skirt = exp(-pow((p.y - 0.005) * 13.0, 2.0)) * smoothstep(0.22, 0.0, abs(p.x)) * 0.6;
-    // 被卷起的碎屑
-    float debris = step(0.86, hash21(floor((p + vec2(0.0, t * 0.05)) * 46.0)))
-                 * smoothstep(0.20, 0.0, abs(p.x)) * smoothstep(0.22, 0.02, p.y) * 0.8;
-    skirt += debris;
+
 
     return clamp(body + skirt, 0.0, 1.0) * step(-0.06, p.y) * smoothstep(0.62, 0.2, p.y);
+}
+
+// 龙卷碎屑：软边圆点，按格哈希随机偏移与相位（不再是整格亮灭的方块阵）
+float tornadoDebris(vec2 uv, vec2 c, float t) {
+    float acc = 0.0;
+    vec2 p = (uv - c) * vec2(0.8, 1.0);
+    for (int i = 0; i < 3; i++) {
+        float k = float(i);
+        float count = 24.0 + k * 18.0;
+        vec2 q = p * count;
+        vec2 id = floor(q);
+        vec2 f = fract(q) - 0.5;
+
+        float h1 = hash21(id + k * 31.0);
+        float h2 = hash21(id + k * 17.0 + 5.3);
+        float h3 = hash21(id + k * 23.0 + 9.1);
+        float alive = step(0.45, h1);
+
+        // 每颗在格内绕小圈漂移，半径随时间伸缩（被甩出去又卷回来）
+        float ang = t * (0.7 + h2 * 1.3) + h1 * 6.2831;
+        float orbit = 0.10 + 0.22 * h2 + 0.10 * sin(t * 0.9 + h3 * 6.28);
+        vec2 offset = vec2(cos(ang), sin(ang)) * orbit;
+
+        float d = length(f - offset);
+        float size = 0.045 + 0.05 * h2;
+        // 只保留漏斗附近的碎屑
+        float nearFunnel = smoothstep(0.52, 0.16, length(p));
+        acc += alive * smoothstep(size, 0.0, d) * (0.35 + 0.65 * h2) * nearFunnel;
+    }
+    return acc;
 }
 
 float particleField(vec2 uv, float t) {
@@ -220,6 +247,10 @@ void mainImage( out vec4 fragColor, in vec2 fragCoord )
         vec3 tornadoColor = vec3(0.74, 0.72, 0.78);
         col = mix(col, tornadoColor, f * 0.88 * uTornado);
         col += vec3(0.26, 0.26, 0.30) * f * f * uTornado;
+
+        // 碎屑粒子：被卷起的尘与碎块
+        float debris = tornadoDebris(uv, uTornadoPos, iTime);
+        col += vec3(0.82, 0.79, 0.82) * debris * 0.85 * uTornado;
         col *= 1.0 - 0.38 * uTornado * smoothstep(0.55, 0.0, length((uv - uTornadoPos) * vec2(1.0, 0.65)));
     }
 
