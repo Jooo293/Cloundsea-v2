@@ -1,4 +1,6 @@
 // 天空 + 星点 + 背景云（半分辨率 pass）
+// STORM 变体（cloudsea.js 编译两份）：龙卷挖空/涡旋/漏斗/闪电只在雷暴变体里编译；
+// 晴雨雪用精简变体——哪怕分支不走，多出来的代码也会让 Intel 核显帧时 +1~3 ms（寄存器压力）。
 // 输出不透明 rgb；城市/列车等前景元素在 composite pass 里叠加。
 
 #define MAX_BG_LAYERS 16
@@ -47,6 +49,10 @@ uniform float uMist;
 uniform float uTornado;
 uniform vec2 uTornadoPos;
 
+// 闪电：强度 + (落点横向比例, 形状种子, 是否有可见电弧)
+uniform float uFlash;
+uniform vec3 uBolt;
+
 // 云形态：域扭曲 / 浪尖 / 列车拨云
 uniform float uWarp;
 uniform float uRidge;
@@ -64,17 +70,20 @@ vec3 paletteColor(int index) {
     return texelFetch(uPalette, ivec2(index, 0), 0).rgb;
 }
 
-vec4 background(vec2 uv, float t, vec2 warpOffset, float carveDelta) {
+// hit = 命中的云层序号（0 最近）；没命中云为 MAX_BG_LAYERS。龙卷/闪电靠它判断"被哪几层云挡住"
+vec4 background(vec2 uv, float t, vec2 warpOffset, float carveDelta, out int hit) {
+    hit = MAX_BG_LAYERS;
     for (int i = 0; i < MAX_BG_LAYERS; i++) {
         if (i >= uLayerCount) break;
 
         vec4 spec = uLayer[i];
         vec2 samplePosition = uv + vec2(t / spec.z + spec.w, 0.0) + warpOffset;
 
+#ifdef STORM
         if (uTornado > 0.001) {
             vec2 d = samplePosition - uTornadoPos;
             float r = length(d) + 1e-4;
-            float ang = uTornado * 5.5 * exp(-r * 2.0);
+            float ang = uTornado * 3.8 * exp(-r * 2.0);
             float c = cos(ang);
             float sn = sin(ang);
             vec2 swirled = vec2(c * d.x - sn * d.y, sn * d.x + c * d.y);
@@ -83,12 +92,16 @@ vec4 background(vec2 uv, float t, vec2 warpOffset, float carveDelta) {
                 - d / r * 0.10 * uTornado * exp(-r * 2.4)
                 + vec2(-d.y, d.x) / r * 0.07 * uTornado * exp(-pow((r - 0.16) * 5.0, 2.0));
         }
+#endif
 
         float n = fbm(samplePosition, 8);
         n = mix(n, 1.0 - abs(n * 2.0 - 1.0), uRidge);
         float h = (n - 0.5) * spec.y;
 
-        h += carveDelta;   // 龙卷挖空（每像素只算一次，见 mainImage）
+#ifdef STORM
+        // 龙卷挖空（每像素只算一次，见 mainImage）；最近两层云海不挖，留作漏斗底部的前景
+        if (i >= 2) h += carveDelta;
+#endif
 
         // 列车拨云：椭圆核下压 + 环状隆起，做出"被排开"的边界
         if (uCarveDepth > 0.0001) {
@@ -102,6 +115,7 @@ vec4 background(vec2 uv, float t, vec2 warpOffset, float carveDelta) {
         for (int b = 0; b < MAX_BANDS; b++) {
             if (b >= uBandCount[i]) break;
             if (uv.y < h + spec.x - dh[b]) {
+                hit = i;
                 return vec4(paletteColor(i * MAX_BANDS + b), 1.0);
             }
         }
@@ -172,6 +186,132 @@ float voronoiEdge(vec2 p) {
     return sqrt(f2) - sqrt(f1);
 }
 
+// 取主题调色板里某层云的某条色带（越界时夹到最后一层/最后一条）
+vec3 paletteTone(int layer, int band) {
+    int l = min(layer, uLayerCount - 1);
+    int b = min(band, uBandCount[l] - 1);
+    return paletteColor(l * MAX_BANDS + b);
+}
+
+// ---------------------------------------------------------------- 龙卷漏斗
+// 和云用同一套画法：噪声侵蚀出来的硬轮廓 + 主题调色板里的 4 档色阶，
+// 而不是半透明灰色渐变柱。返回 (覆盖 0/1, 色阶 0..3)。
+vec2 tornadoFunnel(vec2 uv, float t) {
+    vec2 p = uv - uTornadoPos;
+    if (abs(p.x) > 0.55 || p.y < -0.08 || p.y > 0.80) return vec2(0.0);
+
+    float hgt = clamp(p.y / 0.72, 0.0, 1.0);
+    float grow = smoothstep(0.0, 1.0, uTornado);
+    // 中轴：上部被风推向下风侧，整根缓慢蛇形摆动
+    float axis = 0.09 * hgt * hgt + 0.020 * sin(p.y * 7.0 - t * 0.08) * (0.35 + hgt);
+    float radius = (0.020 + 0.16 * pow(hgt, 2.2)) * grow;
+    float x = (p.x - axis) / max(radius, 1e-4);
+
+    // 圆柱展开：角度随时间转动，噪声"绕着柱子转"；带一点螺旋上升
+    float theta = asin(clamp(x, -1.0, 1.0));
+    float spin = t * 0.18;   // t 是云时间，雷暴下已是 3.2 倍速
+    float n = fbm(vec2(theta * 0.8 + spin - p.y * 4.0, p.y * 8.0), 5);
+    // 轮廓：越往上侵蚀越强，顶部碎成团块并入云底
+    // 边缘再叠一层竖向高频噪声：轮廓是一团团鼓包，而不是两条直线
+    float lump = fbm(vec2(theta * 1.3 + spin * 1.2, p.y * 26.0), 3);
+    // 侵蚀只作用在外缘（|x| 越大越强），芯部不会被掏空成两只角
+    float rim = smoothstep(0.2, 0.9, abs(x));
+    float edge = abs(x) + ((n - 0.5) * (0.6 + 0.7 * smoothstep(0.5, 1.0, hgt)) + (lump - 0.5) * 0.55) * rim;
+    float cover = step(edge, 1.0) * step(-0.02, p.y) * step(hgt, 0.62 + 0.55 * n);
+
+    // 底部卷起的云裙：贴着云海铺开的扁团
+    float sn = fbm(vec2(p.x * 7.0 - t * 0.12, p.y * 10.0), 4);
+    float skirtD = length(vec2((p.x - axis) / (0.16 * grow + 1e-4), (p.y - 0.012) / 0.055)) + (sn - 0.5) * 0.9;
+    float skirt = step(skirtD, 1.0) * grow;
+
+    // 明暗：光从左上来（圆柱法线 x 分量）+ 沿螺旋拉长的条纹，再量化成 4 档
+    float streak = fbm(vec2(theta * 1.6 + spin * 1.4 - p.y * 12.0, p.y * 1.5), 3);
+    float shade = 0.50 - 0.38 * x + (streak - 0.5) * 1.1 + 0.30 * hgt;
+    float tone = clamp(floor(shade * 4.0), 0.0, 3.0);
+    if (cover < 0.5 && skirt > 0.5) tone = clamp(floor((sn + 0.10 - 0.2 * (p.x - axis)) * 3.0), 0.0, 2.0);
+    return vec2(max(cover, skirt), tone);
+}
+
+vec3 tornadoTone(float tone) {
+    // 从主题自己的云层里挑 4 个由暗到亮的色带：暗部 = 近处暗云，亮部 = 远处高云
+    if (tone < 0.5) return paletteTone(2, 0);
+    if (tone < 1.5) return paletteTone(2, 3);
+    if (tone < 2.5) return paletteTone(7, 2);
+    return paletteTone(11, 0);
+}
+
+// ---------------------------------------------------------------- 闪电
+float hash11(float p) {
+    p = fract(p * 0.1031);
+    p *= p + 33.33;
+    p *= p + p;
+    return fract(p);
+}
+
+// 一维折线噪声：段内线性插值 → 每段是直线、转折是尖角
+vec2 jag(float y, float seed) {
+    float i = floor(y);
+    float h0 = hash11(i + seed * 17.0);
+    float h1 = hash11(i + 1.0 + seed * 17.0);
+    return vec2(mix(h0, h1, fract(y)) - 0.5, h1 - h0);   // (值, 对 y 的斜率 / 频率)
+}
+
+// 分形折线：4 个倍频叠加，大折 + 小抖（每次落雷 seed 不同，形状不重复）。
+// 同时返回斜率——不用再为求导多算两次路径
+vec2 boltPath(float y, float seed) {
+    vec2 a = jag(y * 5.0, seed) * vec2(0.11, 0.11 * 5.0);
+    vec2 b = jag(y * 13.0, seed + 3.1) * vec2(0.045, 0.045 * 13.0);
+    vec2 c = jag(y * 31.0, seed + 7.7) * vec2(0.020, 0.020 * 31.0);
+    vec2 d = jag(y * 77.0, seed + 1.3) * vec2(0.007, 0.007 * 77.0);
+    return a + b + c + d;
+}
+
+// 到折线 x = x0 + lean*y + path(y) 的近似距离（按斜率修正，斜段不会变粗）
+float boltDist(vec2 uv, float x0, float lean, float seed) {
+    vec2 path = boltPath(uv.y, seed);
+    float slope = lean + path.y;
+    return abs(uv.x - x0 - lean * uv.y - path.x) / sqrt(1.0 + slope * slope);
+}
+
+// 返回 (电弧核心, 光晕)；主枝从云顶打进云海，两条分叉。
+// 折线最大摆幅约 0.09，再加光晕，离中线 0.15 以外直接跳过
+vec2 lightningBolt(vec2 uv, float x0, float seed) {
+    const float top = 1.02;
+    const float bottom = 0.26;
+    if (uv.y < bottom - 0.02 || abs(uv.x - x0) > 0.40) return vec2(0.0);
+
+    float along = clamp((uv.y - bottom) / (top - bottom), 0.0, 1.0);
+    float w = 0.0016 + 0.0024 * along;               // 上粗下细
+    float core = 0.0;
+    float glow = 0.0;
+    if (abs(uv.x - x0) < 0.15) {
+        float d = boltDist(uv, x0, 0.0, seed);
+        core = 1.0 - smoothstep(w * 0.45, w, d);
+        glow = exp(-d / (w * 5.0));
+    }
+
+    for (int j = 0; j < 2; j++) {
+        float fj = float(j);
+        float y0 = mix(0.45, 0.85, hash11(seed * 3.7 + fj * 11.0));
+        float len = 0.10 + 0.12 * hash11(seed * 5.1 + fj * 7.0);
+        float dir = (hash11(seed * 9.3 + fj) < 0.5 ? -1.0 : 1.0) * (0.35 + 0.45 * hash11(seed + fj * 3.0));
+        if (uv.y > y0 || uv.y < y0 - len) continue;
+        if (abs(uv.x - x0 - (y0 - uv.y) * dir) > 0.24) continue;
+        float k = (y0 - uv.y) / len;                  // 0 分叉点 … 1 末端
+        float bseed = seed + 20.0 + fj;
+        // 分叉：x(y0) 恰好落在主枝上，往下按 dir 斜出去，自带一条更细的抖动
+        float bx0 = x0 + boltPath(y0, seed).x - boltPath(y0, bseed).x + y0 * dir;
+        float bd = boltDist(uv, bx0, -dir, bseed);
+        float bw = w * (0.65 - 0.45 * k);
+        float fade = 1.0 - k;
+        core = max(core, (1.0 - smoothstep(bw * 0.45, bw, bd)) * fade * 0.85);
+        glow = max(glow, exp(-bd / (bw * 5.0)) * fade * 0.7);
+    }
+
+    float ends = smoothstep(bottom - 0.02, bottom + 0.06, uv.y);
+    return vec2(core, glow) * ends;
+}
+
 void mainImage( out vec4 fragColor, in vec2 fragCoord )
 {
     vec2 uv = fragCoord / iResolution.y;
@@ -191,20 +331,37 @@ void mainImage( out vec4 fragColor, in vec2 fragCoord )
 
     // 龙卷：中心挖空 + 边缘抬升 + 外围螺旋云臂
     float carveDelta = 0.0;
+#ifdef STORM
     if (uTornado > 0.001) {
         vec2 td = (uv - uTornadoPos) * vec2(0.80, 1.0);
-        float tr = length(td) + 1e-4;
-        float hole = -smoothstep(0.26, 0.0, tr) * 1.45;
-        float rim = exp(-pow((tr - 0.27) * 8.0, 2.0)) * 0.38;
+        // 半径加一点低频噪声：云墙边缘跟着云块起伏，而不是一个正圆穹顶
+        float tr = length(td) + 1e-4 + (fbm(td * 3.0 + vec2(t * 0.03, 0.0), 3) - 0.5) * 0.22;
+        // 洞壁要陡：缓坡会让 12 层云的等高线排成一圈圈同心环
+        float hole = -(1.0 - smoothstep(0.07, 0.17, tr)) * 1.45;
+        float rim = exp(-pow((tr - 0.21) * 8.0, 2.0)) * 0.20;
         // 云臂：角度 + 半径的螺旋相位，随时间旋转；越靠外越弱
         float ang = atan(td.y, td.x);
         float phase = ang * 3.0 + tr * 22.0 - t * 1.4;
         float arms = sin(phase) * 0.5;
-        float armMask = smoothstep(0.24, 0.34, tr) * smoothstep(0.78, 0.46, tr);
+        float armMask = smoothstep(0.24, 0.34, tr) * (1.0 - smoothstep(0.46, 0.78, tr));
         carveDelta = (hole + rim + arms * armMask * 0.52) * uTornado;
     }
+#endif
 
-    vec4 bg = background(uv, t, warpOffset, carveDelta);
+    int hit;
+    vec4 bg = background(uv, t, warpOffset, carveDelta, hit);
+
+#ifdef STORM
+    // 龙卷漏斗：插在第 2 层云之后——最近的两层云海会盖住它的底部
+    if (uTornado > 0.001 && hit >= 2) {
+        vec2 funnel = tornadoFunnel(uv, t);
+        if (funnel.x > 0.5) {
+            bg = vec4(tornadoTone(funnel.y), 1.0);
+            hit = 2;
+        }
+    }
+#endif
+
     vec3 col = mix(sky, bg.rgb, bg.a);
 
     if (uWeatherActive > 0.5) {
@@ -228,6 +385,33 @@ void mainImage( out vec4 fragColor, in vec2 fragCoord )
         float twinkle = 0.70 + 0.30 * sin(t * 2.0 + uv.x * 40.0);
         col += uIceColor * e * uIceStrength * twinkle;
     }
+
+#ifdef STORM
+    // 闪电：先照亮云（按块色阶化，和云带一样是平涂的台阶），再画电弧；
+    // 电弧排在第 3 层云之后，打进云海的那一截会被近处的云吞掉
+    if (uFlash > 0.001) {
+        float aspect = iResolution.x / iResolution.y;
+        float bx = uBolt.x * aspect;
+        vec3 cool = vec3(0.62, 0.70, 0.95);
+
+        // 云内的光是横向铺开的一片，边界跟着云块走（噪声扭曲 + 只在云上取色阶）
+        vec2 L = vec2(bx, 0.84);
+        float wn = fbm(uv * vec2(3.2, 4.5) + uBolt.y * 1.7, 3);
+        float dist = length((uv - L) * vec2(0.45, 1.35)) + (wn - 0.5) * 0.75;
+        float lit = uFlash * exp(-max(dist, 0.0) * 2.0);
+        float litQ = floor(lit * 4.0) / 4.0 * bg.a + lit * 0.25 * (1.0 - bg.a);
+        // 滤色叠加：暗云亮得多、亮云亮得少，不会冲成一片白
+        col = 1.0 - (1.0 - col) * (1.0 - litQ * 0.62 * vec3(0.82, 0.88, 1.0));
+        col += cool * uFlash * 0.04;
+
+        if (uBolt.z > 0.5 && hit >= 3) {
+            vec2 b = lightningBolt(uv, bx, uBolt.y);
+            float on = smoothstep(0.25, 0.6, uFlash);
+            col = mix(col, cool * 1.15 + 0.2, clamp(b.y * 0.6 * on, 0.0, 1.0));
+            col = mix(col, vec3(1.0, 0.98, 0.95), b.x * on);
+        }
+    }
+#endif
 
     // 雨雾：两层低频噪声，缓慢横向流动，随高度略增（贴近云顶更浓）
     if (uMist > 0.001) {

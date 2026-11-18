@@ -2,7 +2,7 @@
 #
 #   1. build the single-file release (unless -SkipBuild)
 #   2. serve it over http on a local port
-#   3. render 8 deterministic screenshots (4 themes + 4 weathers) with headless Edge
+#   3. render 6 deterministic screenshots (4 themes + 2 weathers) with headless Edge
 #   4. fail if the browser console reports shader / JS errors
 #
 # Usage:
@@ -92,8 +92,6 @@ try {
     @{ name = "theme-ruins";   query = "theme=ruins" },
     @{ name = "theme-polar";   query = "theme=polar" },
     @{ name = "weather-sunny"; query = "theme=cyber&weather=sunny" },
-    @{ name = "weather-rain";  query = "theme=cyber&weather=rain" },
-    @{ name = "weather-snow";  query = "theme=cyber&weather=snow" },
     @{ name = "weather-storm"; query = "theme=cyber&weather=storm&flash=0.9" }
   )
 
@@ -133,7 +131,7 @@ try {
     Write-Host "RESULT: FAIL -> $($failures -join ', ')"
     exit 1
   }
-  Write-Host "RESULT: PASS (8/8 screenshots, no console errors)"
+  Write-Host "RESULT: PASS ($($cases.Count)/$($cases.Count) screenshots, no console errors)"
   Write-Host "artifacts: shots/verify/"
   exit 0
 }

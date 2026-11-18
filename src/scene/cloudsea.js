@@ -42,7 +42,7 @@ const SKY_UNIFORMS = [
   "uIceEnabled", "uIceStrength", "uIceScale", "uIceColor",
   "uWarp", "uRidge", "uCarvePos", "uCarveRadius", "uCarveDepth",
   "uWeatherActive", "uBrightness", "uContrast", "uSaturation", "uCloudTime", "uMist",
-  "uTornado", "uTornadoPos",
+  "uTornado", "uTornadoPos", "uFlash", "uBolt",
 ];
 
 const FG_UNIFORMS = [
@@ -59,7 +59,7 @@ const COMPOSITE_UNIFORMS = [
   "uParticleColor", "uParticleDensity", "uParticleSpeed", "uWeatherParticleMul", "uParticleDir",
   "uWeatherParticleSpeed", "uWeatherParticleDriftX", "uWeatherParticleShape", "uWeatherParticleSize",
   "uWeatherParticleMix", "uWeatherParticleColor",
-  "uPrecipType", "uPrecipAmount", "uWindSlant", "uTornado", "uTornadoPos", "uFlash",
+  "uPrecipAmount", "uWindSlant", "uTornado", "uTornadoPos", "uFlash",
   "uParallax", "uScanline", "uTrainOffset", "uTrainScale", "uSmokeFade", "uRailFade",
   "uTrainGrain", "uCraneEnabled", "uCraneColor",
   "uSnowCover", "uSnowColor",
@@ -67,7 +67,10 @@ const COMPOSITE_UNIFORMS = [
 
 const BRIGHT_UNIFORMS = ["iResolution", "iChannel0", "uThreshold"];
 const BLUR_UNIFORMS = ["iResolution", "iChannel0", "uDirection"];
-const FINAL_UNIFORMS = ["iResolution", "iChannel0", "iChannel1", "uBloomStrength", "uPaper", "uFlash", "uNoise"];
+const FINAL_UNIFORMS = [
+  "iResolution", "iChannel0", "iChannel1", "uBloomStrength", "uPaper", "uFlash", "uNoise",
+  "uBurst", "uBurstTime", "uBurstFocus", "uFogDark", "uFogMid", "uFogLight",
+];
 
 async function loadText(path) {
   // 单文件构建时着色器以全局变量注入，优先读内存
@@ -101,17 +104,23 @@ export class CloudSeaRenderer {
       loadImage(`${basePath}assets/noise.png`),
     ]);
 
-    const make = (fragment, uniforms, label) =>
-      createProgram(gl, { vertex, fragment: withEntry(`${common}\n${fragment}`), uniforms, label });
+    const make = (fragment, uniforms, label, defines = "") =>
+      createProgram(gl, { vertex, fragment: withEntry(`${defines}${common}\n${fragment}`), uniforms, label });
 
+    // sky 编两份：雷暴变体带龙卷/闪电；其余天气用精简变体，不为用不到的代码付帧时
     const skyPass = make(sky, SKY_UNIFORMS, "sky");
+    const skyStormPass = make(sky, SKY_UNIFORMS, "sky-storm", "#define STORM\n");
     const fgPass = make(fg, FG_UNIFORMS, "fg");
     const compositePass = make(composite, COMPOSITE_UNIFORMS, "composite");
+    // composite 同理：降水 / 龙卷碎屑只进有天气的变体
+    const compositeWeatherPass = make(composite, COMPOSITE_UNIFORMS, "composite-weather", "#define WEATHER\n");
     const brightPass = make(bright, BRIGHT_UNIFORMS, "bright");
     const blurPass = make(blur, BLUR_UNIFORMS, "blur");
     const finalPass = make(final, FINAL_UNIFORMS, "final");
+    // final 同理：穿云演出的代码只进演出期间用的变体
+    const finalBurstPass = make(final, FINAL_UNIFORMS, "final-burst", "#define BURST\n");
 
-    return new CloudSeaRenderer(gl, { skyPass, fgPass, compositePass, brightPass, blurPass, finalPass }, createNoiseTexture(gl, image), { cloudScale });
+    return new CloudSeaRenderer(gl, { skyPass, skyStormPass, fgPass, compositePass, compositeWeatherPass, brightPass, blurPass, finalPass, finalBurstPass }, createNoiseTexture(gl, image), { cloudScale });
   }
 
   constructor(gl, passes, noiseTexture, { cloudScale }) {
@@ -140,13 +149,17 @@ export class CloudSeaRenderer {
     this.weather = {
       active: 0, brightness: 1, contrast: 1, saturation: 1,
       particleMul: 1, particleDir: 1, particleSpeed: 1, particleDriftX: 0, particleShape: 0, particleSize: 1, particleMix: 0,
-      precipType: 0, precipAmount: 0, mist: 0, tornado: 0,
+      precipAmount: 0, mist: 0, tornado: 0,
       particleColor: [1, 1, 1],
     };
     this.cloudTime = 0;
     this.flash = 0;
+    this.bolt = { x: 0.32, seed: 3, visible: 1 };
     this.train = { x: 0, y: 0, scale: 1, smokeFade: 1, railFade: 1 };
     this.bloomStrength = 0;
+    // 穿云演出：覆盖 / 破洞 / 镜头倍率 / 速度；颜色取主题前景云
+    this.burst = { cover: 0, burst: 0, zoom: 1, speed: 0, time: 0, focus: [0.56, 0.33] };
+    this.fog = { dark: [0, 0, 0], mid: [0, 0, 0], light: [0, 0, 0] };
     this.bloomThreshold = 0.7;
     this.themeId = null;
 
@@ -166,30 +179,32 @@ export class CloudSeaRenderer {
       if (loc) gl.uniform3f(loc, color[0], color[1], color[2]);
     };
 
-    // 天空 / 背景云
-    gl.useProgram(this.skyPass.program);
-    gl.uniform1i(this.skyPass.uniforms.uLayerCount, u.layerCount);
-    gl.uniform4fv(this.skyPass.uniforms.uLayer, u.layers);
-    gl.uniform4fv(this.skyPass.uniforms.uBandDh, u.bandDh);
-    gl.uniform1iv(this.skyPass.uniforms.uBandCount, u.bandCount);
-    gl.uniform3fv(this.skyPass.uniforms.uSkyTop, u.skyTop);
-    gl.uniform3fv(this.skyPass.uniforms.uSkyBottom, u.skyBottom);
-    gl.uniform1f(this.skyPass.uniforms.uStarDensity, u.starDensity);
-    gl.uniform1f(this.skyPass.uniforms.uInkEdge, u.ink.edge);
-    gl.uniform1f(this.skyPass.uniforms.uInkGain, u.ink.gain);
-    set3(this.skyPass, "uInkColor", u.ink.color);
-    gl.uniform1f(this.skyPass.uniforms.uMountainEnabled, u.mountains.on);
-    set3(this.skyPass, "uMountainNear", u.mountains.near);
-    set3(this.skyPass, "uMountainFar", u.mountains.far);
-    gl.uniform1f(this.skyPass.uniforms.uAuroraEnabled, u.aurora.on);
-    gl.uniform1f(this.skyPass.uniforms.uAuroraStrength, u.aurora.strength);
-    set3(this.skyPass, "uAuroraColor", u.aurora.color);
-    gl.uniform1f(this.skyPass.uniforms.uIceEnabled, u.ice.on);
-    gl.uniform1f(this.skyPass.uniforms.uIceStrength, u.ice.strength);
-    gl.uniform1f(this.skyPass.uniforms.uIceScale, u.ice.scale);
-    set3(this.skyPass, "uIceColor", u.ice.color);
-    gl.uniform1f(this.skyPass.uniforms.uWarp, u.cloud.warp);
-    gl.uniform1f(this.skyPass.uniforms.uRidge, u.cloud.ridge);
+    // 天空 / 背景云（两个变体都要上传）
+    for (const sky of [this.skyPass, this.skyStormPass]) {
+      gl.useProgram(sky.program);
+      gl.uniform1i(sky.uniforms.uLayerCount, u.layerCount);
+      gl.uniform4fv(sky.uniforms.uLayer, u.layers);
+      gl.uniform4fv(sky.uniforms.uBandDh, u.bandDh);
+      gl.uniform1iv(sky.uniforms.uBandCount, u.bandCount);
+      gl.uniform3fv(sky.uniforms.uSkyTop, u.skyTop);
+      gl.uniform3fv(sky.uniforms.uSkyBottom, u.skyBottom);
+      gl.uniform1f(sky.uniforms.uStarDensity, u.starDensity);
+      gl.uniform1f(sky.uniforms.uInkEdge, u.ink.edge);
+      gl.uniform1f(sky.uniforms.uInkGain, u.ink.gain);
+      set3(sky, "uInkColor", u.ink.color);
+      gl.uniform1f(sky.uniforms.uMountainEnabled, u.mountains.on);
+      set3(sky, "uMountainNear", u.mountains.near);
+      set3(sky, "uMountainFar", u.mountains.far);
+      gl.uniform1f(sky.uniforms.uAuroraEnabled, u.aurora.on);
+      gl.uniform1f(sky.uniforms.uAuroraStrength, u.aurora.strength);
+      set3(sky, "uAuroraColor", u.aurora.color);
+      gl.uniform1f(sky.uniforms.uIceEnabled, u.ice.on);
+      gl.uniform1f(sky.uniforms.uIceStrength, u.ice.strength);
+      gl.uniform1f(sky.uniforms.uIceScale, u.ice.scale);
+      set3(sky, "uIceColor", u.ice.color);
+      gl.uniform1f(sky.uniforms.uWarp, u.cloud.warp);
+      gl.uniform1f(sky.uniforms.uRidge, u.cloud.ridge);
+    }
     this.carveDepth = u.cloud.carve;
 
     // 前景云
@@ -201,39 +216,48 @@ export class CloudSeaRenderer {
     gl.uniform3fv(this.fgPass.uniforms.uFgFallback, u.fgFallback);
 
     // 合成层
-    gl.useProgram(this.compositePass.program);
-    set3(this.compositePass, "uTrainBody", u.train.body);
-    set3(this.compositePass, "uTrainRoof", u.train.roof);
-    set3(this.compositePass, "uTrainTrim", u.train.trim);
-    set3(this.compositePass, "uTrainEmissive", u.train.emissive);
-    gl.uniform1f(this.compositePass.uniforms.uEmissiveEnergy, u.train.energy);
-    set3(this.compositePass, "uSmokeA", u.train.smokeA);
-    set3(this.compositePass, "uSmokeB", u.train.smokeB);
-    gl.uniform1f(this.compositePass.uniforms.uSmokeStrength, u.smokeStrength);
-    set3(this.compositePass, "uBridgeColor", u.train.bridge);
+    for (const comp of [this.compositePass, this.compositeWeatherPass]) {
+      gl.useProgram(comp.program);
+      set3(comp, "uTrainBody", u.train.body);
+      set3(comp, "uTrainRoof", u.train.roof);
+      set3(comp, "uTrainTrim", u.train.trim);
+      set3(comp, "uTrainEmissive", u.train.emissive);
+      gl.uniform1f(comp.uniforms.uEmissiveEnergy, u.train.energy);
+      set3(comp, "uSmokeA", u.train.smokeA);
+      set3(comp, "uSmokeB", u.train.smokeB);
+      gl.uniform1f(comp.uniforms.uSmokeStrength, u.smokeStrength);
+      set3(comp, "uBridgeColor", u.train.bridge);
 
-    gl.uniform1f(this.compositePass.uniforms.uCityEnabled, u.city.on);
-    set3(this.compositePass, "uCityColor", u.city.color);
-    set3(this.compositePass, "uCityWindow", u.city.window);
+      gl.uniform1f(comp.uniforms.uCityEnabled, u.city.on);
+      set3(comp, "uCityColor", u.city.color);
+      set3(comp, "uCityWindow", u.city.window);
 
-    set3(this.compositePass, "uParticleColor", u.particles.color);
-    gl.uniform1f(this.compositePass.uniforms.uParticleDensity, u.particles.density);
-    gl.uniform1f(this.compositePass.uniforms.uParticleSpeed, u.particles.speed);
-    gl.uniform1f(this.compositePass.uniforms.uScanline, u.scanline);
-    gl.uniform1f(this.compositePass.uniforms.uTrainGrain, u.grain);
-    gl.uniform1f(this.compositePass.uniforms.uCraneEnabled, u.cranes.on);
-    set3(this.compositePass, "uCraneColor", u.cranes.color);
-    gl.uniform1f(this.compositePass.uniforms.uSnowCover, u.snow);
-    set3(this.compositePass, "uSnowColor", [0.95, 0.98, 1.0]);
+      set3(comp, "uParticleColor", u.particles.color);
+      gl.uniform1f(comp.uniforms.uParticleDensity, u.particles.density);
+      gl.uniform1f(comp.uniforms.uParticleSpeed, u.particles.speed);
+      gl.uniform1f(comp.uniforms.uScanline, u.scanline);
+      gl.uniform1f(comp.uniforms.uTrainGrain, u.grain);
+      gl.uniform1f(comp.uniforms.uCraneEnabled, u.cranes.on);
+      set3(comp, "uCraneColor", u.cranes.color);
+      gl.uniform1f(comp.uniforms.uSnowCover, u.snow);
+      set3(comp, "uSnowColor", [0.95, 0.98, 1.0]);
+    }
 
     // 宣纸纹理在 final pass
-    gl.useProgram(this.finalPass.program);
-    gl.uniform1f(this.finalPass.uniforms.uPaper, u.paper);
+    for (const fin of [this.finalPass, this.finalBurstPass]) {
+      gl.useProgram(fin.program);
+      gl.uniform1f(fin.uniforms.uPaper, u.paper);
+    }
 
     // 调色板纹理（sky / fg 共用）
     gl.activeTexture(gl.TEXTURE2);
     gl.bindTexture(gl.TEXTURE_2D, this.paletteTexture);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, PALETTE_SIZE, 1, 0, gl.RGBA, gl.FLOAT, u.palette);
+
+    // 演出云层沿用主题前景云的色带：最暗 = 近层底色，中/亮 = 远层两端
+    const near = theme.fg[0].colors;
+    const far = theme.fg[theme.fg.length - 1].colors;
+    this.fog = { dark: near[0], mid: far[Math.floor(far.length / 2)], light: far[far.length - 1] };
 
     this.bloomStrength = u.bloom;
     this.bloomThreshold = u.bloomThreshold;
@@ -271,7 +295,6 @@ export class CloudSeaRenderer {
     this.weather.particleSize = weather.particleSize ?? 1;
     this.weather.particleMix = weather.particleMix ?? 0;
     this.weather.particleColor = weather.particleColor || [1, 1, 1];
-    this.weather.precipType = weather.precipType ?? 0;
     this.weather.precipAmount = weather.precipAmount ?? 0;
     this.weather.mist = weather.mist ?? 0;
     this.weather.tornado = weather.tornado ?? 0;
@@ -282,8 +305,16 @@ export class CloudSeaRenderer {
     this.tornadoPos[0] = 0.60 + Math.sin(this.cloudTime * 0.05) * 0.05;
   }
 
-  setFlash(value) {
+  /** 闪电强度 + 本次落雷（落点 x 为屏幕横向比例、形状种子、是否有可见电弧）。 */
+  /** 穿云演出的包络（CloudBurst.state()）与镜头焦点（uv / 高度 单位）。 */
+  setBurst(state, focus) {
+    Object.assign(this.burst, state);
+    if (focus) this.burst.focus = focus;
+  }
+
+  setFlash(value, bolt) {
     this.flash = value;
+    if (bolt) this.bolt = bolt;
   }
 
   /** 列车位移（uv 单位）与淡出系数，由 TrainSystem 每帧喂入。 */
@@ -313,7 +344,8 @@ export class CloudSeaRenderer {
 
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.cloudTarget.framebuffer);
     gl.viewport(0, 0, cw, ch);
-    this.draw(this.skyPass, [this.noiseTexture], cw, ch, time);
+    const stormy = this.weather.tornado > 0.001 || this.flash > 0.001;
+    this.draw(stormy ? this.skyStormPass : this.skyPass, [this.noiseTexture], cw, ch, time);
 
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.fgTarget.framebuffer);
     gl.viewport(0, 0, cw, ch);
@@ -321,7 +353,8 @@ export class CloudSeaRenderer {
 
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.sceneTarget.framebuffer);
     gl.viewport(0, 0, width, height);
-    this.draw(this.compositePass, [this.cloudTarget.texture, this.fgTarget.texture], width, height, time);
+    const wet = stormy || this.weather.precipAmount > 0.001;
+    this.draw(wet ? this.compositeWeatherPass : this.compositePass, [this.cloudTarget.texture, this.fgTarget.texture], width, height, time);
 
     let bloomTexture = this.sceneTarget.texture;
     if (this.bloomStrength > 0) {
@@ -351,8 +384,20 @@ export class CloudSeaRenderer {
 
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.viewport(0, 0, width, height);
-    this.draw(this.finalPass, [this.sceneTarget.texture, bloomTexture], width, height, time, (pass) => {
+    const finalPass = this.burst.cover > 0 ? this.finalBurstPass : this.finalPass;
+    this.draw(finalPass, [this.sceneTarget.texture, bloomTexture], width, height, time, (pass) => {
       gl.uniform1f(pass.uniforms.uBloomStrength, this.bloomStrength);
+      if (!pass.uniforms.uBurst) return;   // 非演出变体没有这些 uniform
+      const b = this.burst;
+      gl.uniform4f(pass.uniforms.uBurst, b.cover, b.burst, b.zoom, b.speed);
+      gl.uniform1f(pass.uniforms.uBurstTime, b.time);
+      gl.uniform2f(pass.uniforms.uBurstFocus, b.focus[0], b.focus[1]);
+      // 天气压暗时演出云跟着暗，不然雷暴里会冒出一团亮云
+      const k = this.weather.active ? 1 + (this.weather.brightness - 1) * 0.8 : 1;
+      const fog3 = (name, c) => gl.uniform3f(pass.uniforms[name], c[0] * k, c[1] * k, c[2] * k);
+      fog3("uFogDark", this.fog.dark);
+      fog3("uFogMid", this.fog.mid);
+      fog3("uFogLight", this.fog.light);
     });
   }
 
@@ -431,13 +476,16 @@ export class CloudSeaRenderer {
       gl.uniform1f(pass.uniforms.uFlash, this.flash);
     }
 
+    if (pass.uniforms.uBolt) {
+      gl.uniform3f(pass.uniforms.uBolt, this.bolt.x, this.bolt.seed, this.bolt.visible);
+    }
+
     if (pass.uniforms.uTornado) {
       gl.uniform1f(pass.uniforms.uTornado, this.weather.tornado);
       gl.uniform2f(pass.uniforms.uTornadoPos, this.tornadoPos[0], this.tornadoPos[1]);
     }
 
-    if (pass.uniforms.uPrecipType) {
-      gl.uniform1f(pass.uniforms.uPrecipType, this.weather.precipType);
+    if (pass.uniforms.uPrecipAmount) {
       gl.uniform1f(pass.uniforms.uPrecipAmount, this.weather.precipAmount);
       gl.uniform1f(pass.uniforms.uWindSlant, this.weather.particleDriftX);
     }
@@ -455,7 +503,7 @@ export class CloudSeaRenderer {
 
   dispose() {
     const gl = this.gl;
-    for (const pass of [this.skyPass, this.fgPass, this.compositePass, this.brightPass, this.blurPass, this.finalPass]) {
+    for (const pass of [this.skyPass, this.skyStormPass, this.fgPass, this.compositePass, this.compositeWeatherPass, this.brightPass, this.blurPass, this.finalPass, this.finalBurstPass]) {
       gl.deleteProgram(pass.program);
     }
     gl.deleteTexture(this.noiseTexture);

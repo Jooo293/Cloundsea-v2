@@ -1,5 +1,6 @@
 // 合成 pass（全分辨率）：半分辨率云图 + 城市剪影 + 列车 + 烟 + 桥 + 前景云 + 粒子
 // iChannel0 = 天空/背景云，iChannel1 = 前景云（带 alpha）
+// WEATHER 变体（cloudsea.js 编译两份）：降水与龙卷碎屑只在有天气时编译，晴天不为它们付寄存器压力
 
 uniform vec3 uTrainBody;
 uniform vec3 uTrainRoof;
@@ -29,7 +30,6 @@ uniform vec3 uWeatherParticleColor;
 
 // 降水与龙卷
 uniform float uFlash;        // 闪电强度，用来照亮雨丝
-uniform float uPrecipType;   // 0 无 / 1 雨 / 2 雪
 uniform float uPrecipAmount;
 uniform float uWindSlant;
 uniform float uTornado;
@@ -90,81 +90,46 @@ vec3 cityComposite(vec3 col, vec2 uv) {
     return outCol;
 }
 
-// 暴雨：三层，彼此的速度/斜率/透明度不同；每条雨丝长度随机、头尾渐隐、带微弱风噪
-float rainField(vec2 uv, float t, float slant) {
+// 暴雨：不画"白线"，而是让背景沿雨丝方向被轻微提亮（像镜头前的动态模糊）。
+// 远层细密、几乎成纹理；近层稀疏、更宽更虚；疏密由低频"雨幕"控制（阵雨一片片扫过）。
+// 返回 (雨丝强度, 雨幕浓度)
+vec2 rainField(vec2 uv, float t, float slant) {
+    // 雨幕：沿风向斜切的低频噪声，快速下扫
+    float sheer = slant * 0.10;
+    float s = uv.x + uv.y * sheer;
+    float curtain = fbm(vec2(s * 2.0 + t * 0.10 * slant, uv.y * 0.7 + t * 1.1), 3);
+    float gust = smoothstep(0.32, 0.72, curtain);
+
     float acc = 0.0;
     for (int i = 0; i < 3; i++) {
-        float k = float(i);
-        float cells = 26.0 * (1.0 + k * 0.55);
-        float layerSlant = slant * (0.55 + k * 0.55);   // 每层角度不同，避免平行雨幕
-        vec2 p = vec2(uv.x * cells + t * slant * (0.35 + k * 0.45),
-                      uv.y * cells * 0.5 - t * (9.0 + k * 7.0));
+        float k = float(i);                           // 0 远 … 2 近
+        float cells = 90.0 / (1.0 + k * 1.3);         // 远层格子密
+        float layerSheer = sheer * (0.8 + k * 0.25);  // 每层斜率略有不同，避免完全平行
+        float speed = 1.6 + k * 1.1;                  // 近层更快
+        vec2 p = vec2((uv.x + uv.y * layerSheer) * cells,
+                      (uv.y + t * speed) * cells * 0.16);
         vec2 cell = floor(p);
-        vec2 f = fract(p) - 0.5;
+        vec2 f = fract(p);
 
         float h = hash21(cell + k * 7.0);
         float h2 = hash21(cell + k * 7.0 + 11.3);
-        float alive = step(0.42, h);
+        float alive = step(h, mix(0.10, 0.55, gust) * (1.0 - k * 0.22));
 
-        // 长短随机：40%–100% 个单元高，位置在单元内随机
-        float len = 0.40 + 0.60 * h2;
-        float yc = (h2 - 0.5) * (1.0 - len);
-        float ly = (f.y - yc) / len;              // -0.5（尾）… +0.5（头）
-        float along = 1.0 - abs(ly) * 2.0;        // 两端 0，中间 1
-        float taper = smoothstep(0.0, 0.22, along); // 头尾渐隐，不是硬白条
+        // 长度随机，头（下端）略亮，两端渐隐
+        float len = 0.45 + 0.50 * h2;
+        float y0 = h * (1.0 - len);
+        float a = (f.y - y0) / len;                   // 0 下端 … 1 上端
+        float along = smoothstep(0.0, 0.15, a) * (1.0 - smoothstep(0.35, 1.0, a));
 
-        // 阵风：逐条雨丝的水平扰动，随时间缓变
-        float wobble = sin(t * 1.7 + h * 24.0) * 0.018;
-        float across = abs(f.x + wobble - ly * len * layerSlant * 0.22);
-        float streak = smoothstep(0.055, 0.0, across) * taper;
+        // 横向：远层 ~1px 实线，近层宽而虚（越近越"糊"）
+        float x0 = 0.2 + 0.6 * h2;
+        float across = abs(f.x - x0) / cells;         // 回到 uv 单位
+        float width = 0.0006 + 0.0006 * k;
+        float streak = exp(-across * across / (width * width));
 
-        acc += alive * streak * (0.62 - k * 0.14) * (0.55 + 0.45 * h2);
+        acc += alive * along * streak * (0.55 + 0.25 * k);
     }
-    return acc;
-}
-
-// 暴雪：三层不同大小的雪花，缓慢下落 + 横向摆动
-float snowField(vec2 uv, float t) {
-    float acc = 0.0;
-    for (int i = 0; i < 3; i++) {
-        float k = float(i);
-        float cells = 16.0 * (1.0 + k * 0.7);
-        vec2 p = vec2(uv.x * cells + sin(uv.y * 4.0 + t * 0.9 + k * 2.0) * 0.45,
-                      uv.y * cells * 0.75 - t * (1.4 + k * 1.1));
-        vec2 cell = floor(p);
-        vec2 f = fract(p) - 0.5;
-        float h = hash21(cell + k * 13.0);
-        float alive = step(0.58, h);
-        float d = length(f);
-        acc += alive * smoothstep(0.26 + k * 0.05, 0.0, d) * (0.7 - k * 0.15);
-    }
-    return acc;
-}
-
-// 龙卷：下窄上宽的螺旋柱 + 底部尘幕
-float tornadoBody(vec2 uv, vec2 c, float t) {
-    vec2 p = uv - c;
-    float hgt = clamp(p.y / 0.86, 0.0, 1.0);
-    float width = 0.024 + 0.155 * pow(hgt, 1.9);   // 底部窄、顶部张开成喇叭口
-    float sway = 0.035 * sin(p.y * 6.0 + t * 1.4);
-    float x = abs(p.x - sway);
-    float body = smoothstep(width, width * 0.5, x);
-
-    // 旋转条纹：角度 + 高度 + 时间
-    float ang = atan(p.x - sway, p.y + 1e-3);
-    float spiral = 0.5 + 0.5 * sin(ang * 4.0 + p.y * 30.0 - t * 9.0);
-    body *= 0.45 + 0.55 * spiral;
-    // 细密的竖直流线，避免"一根光滑圆柱"
-    body *= 0.78 + 0.22 * sin(p.x * 58.0 + p.y * 12.0 - t * 10.0);
-
-    // 底部尘幕：贴着云海铺开一圈
-    float skirt = exp(-pow((p.y - 0.005) * 13.0, 2.0)) * smoothstep(0.22, 0.0, abs(p.x)) * 0.6;
-
-
-    // 顶部渐隐：smoothstep(edge0>edge1) 在 GLSL 里是未定义行为，
-    // 之前造成一条硬切边；这里用 1 - smoothstep 保证单调
-    float profile = step(-0.06, p.y) * (1.0 - smoothstep(0.30, 0.74, p.y));
-    return clamp(body * 0.94 + skirt, 0.0, 1.0) * profile;
+    return vec2(acc, gust);
 }
 
 // 龙卷碎屑：软边圆点，按格哈希随机偏移与相位（不再是整格亮灭的方块阵）
@@ -181,7 +146,7 @@ float tornadoDebris(vec2 uv, vec2 c, float t) {
         float h1 = hash21(id + k * 31.0);
         float h2 = hash21(id + k * 17.0 + 5.3);
         float h3 = hash21(id + k * 23.0 + 9.1);
-        float alive = step(0.45, h1);
+        float alive = step(0.62, h1);
 
         // 每颗在格内绕小圈漂移，半径随时间伸缩（被甩出去又卷回来）
         // 统一角速度（同一旋转方向），只有相位差
@@ -192,8 +157,9 @@ float tornadoDebris(vec2 uv, vec2 c, float t) {
         float d = length(f - offset);
         float size = 0.045 + 0.05 * h2;
         // 只保留漏斗附近的碎屑
-        float nearFunnel = smoothstep(0.52, 0.16, length(p));
-        acc += alive * smoothstep(size, 0.0, d) * (0.35 + 0.65 * h2) * nearFunnel;
+        // 只在漏斗下半段附近：被卷起来的东西贴着柱子转，不铺满整片天
+        float nearFunnel = 1.0 - smoothstep(0.04, 0.20, length((p - vec2(0.0, 0.09)) * vec2(1.0, 0.55)));
+        acc += alive * (1.0 - smoothstep(0.0, size, d)) * (0.35 + 0.65 * h2) * nearFunnel;
     }
     return acc;
 }
@@ -236,27 +202,14 @@ void mainImage( out vec4 fragColor, in vec2 fragCoord )
     vec4 cloudTexel = texture(iChannel0, fragCoord / iResolution.xy);
     vec3 col = cloudTexel.rgb;
 
-    // 龙卷：亮灰螺旋柱 + 外围螺旋云臂 + 边缘高光 + 附近压暗
+#ifdef WEATHER
+    // 龙卷：漏斗本体已在 sky pass 里按云的画法绘制；这里只加被卷起的暗色碎屑与周围压暗
     if (uTornado > 0.001) {
-        // 云臂（很淡的灰度带，绕漏斗向外卷）
-        vec2 ap = (uv - uTornadoPos) * vec2(0.8, 1.0);
-        float ar = length(ap) + 1e-4;
-        float aa = atan(ap.y, ap.x);
-        float armPhase = aa * 3.0 + ar * 18.0 - iTime * 1.3;
-        float armBand = smoothstep(0.55, 0.0, abs(sin(armPhase)));
-        float armMask = smoothstep(0.26, 0.34, ar) * smoothstep(0.70, 0.44, ar);
-        col = mix(col, vec3(0.60, 0.58, 0.63), armBand * armMask * 0.16 * uTornado);
-
-        float f = tornadoBody(uv, uTornadoPos, iTime);
-        vec3 tornadoColor = vec3(0.74, 0.72, 0.78);
-        col = mix(col, tornadoColor, f * 0.88 * uTornado);
-        col += vec3(0.26, 0.26, 0.30) * f * f * uTornado;
-
-        // 碎屑粒子：被卷起的尘与碎块
         float debris = tornadoDebris(uv, uTornadoPos, iTime);
-        col += vec3(0.82, 0.79, 0.82) * debris * 0.85 * uTornado;
-        col *= 1.0 - 0.38 * uTornado * smoothstep(0.55, 0.0, length((uv - uTornadoPos) * vec2(1.0, 0.65)));
+        col = mix(col, col * 0.35, clamp(debris, 0.0, 1.0) * 0.85 * uTornado);
+        col *= 1.0 - 0.22 * uTornado * (1.0 - smoothstep(0.0, 0.55, length((uv - uTornadoPos) * vec2(1.0, 0.65))));
     }
+#endif
 
     // 城市剪影：压在云海之上、列车与前景云之下
     if (uCityEnabled > 0.5) col = cityComposite(col, uv);
@@ -321,28 +274,24 @@ void mainImage( out vec4 fragColor, in vec2 fragCoord )
     // 仙鹤（云前）
     if (uCraneEnabled > 0.5) col = mix(col, uCraneColor, craneField(uv, t) * 0.9);
 
-    // 降水：暴雨/暴雪直接覆在画面最前层（除粒子外）
+#ifdef WEATHER
+    // 降水（只有雷暴的暴雨）：覆在画面最前层（除粒子外）
     if (uPrecipAmount > 0.001) {
-        if (uPrecipType > 1.5) {
-            float snow = snowField(uv, iTime);
-            float snowVis = mix(1.0, 0.70, fg.a) * mix(0.80, 1.0, 1.0 - cloudTexel.a);
-            vec3 snowTint = vec3(0.97, 0.99, 1.0) + vec3(0.5, 0.6, 0.8) * uFlash;
-            col = mix(col, snowTint, clamp(snow * uPrecipAmount * snowVis * 0.9, 0.0, 0.9));
-        } else {
-            float rain = rainField(uv, iTime, uWindSlant);
-            // 雨色采样背景：60% 揉进当前画面，再按背景亮度提亮，避免"浮在最上层的白条"
-            vec3 rainTint = mix(vec3(0.80, 0.88, 0.98), col * 1.35 + 0.02, 0.45);
-            float lum = dot(col, vec3(0.299, 0.587, 0.114));
-            // 遮挡：前景雾挡掉大部分雨；天空缝隙里雨更清楚
+        {
+            vec2 rf = rainField(uv, iTime, uWindSlant);
+            float rain = rf.x;
+            // 遮挡：前景雾挡掉一部分雨；天空缝隙里雨更清楚
             float rainVis = mix(1.0, 0.55, fg.a) * mix(0.70, 1.0, 1.0 - cloudTexel.a);
-            float vis = clamp(rain * uPrecipAmount * rainVis * (0.80 + 0.60 * lum), 0.0, 0.9);
-            // 闪电瞬间：雨色更亮、雨丝自身也发光
-            rainTint += vec3(0.90, 0.95, 1.0) * uFlash * 0.55;
-            vis = clamp(vis * (1.0 + 0.55 * uFlash), 0.0, 0.95);
-            col = mix(col, rainTint, vis);
-            col += rain * 0.09 * (0.35 + lum) * (1.0 + 1.6 * uFlash);
+            // 雨幕：阵雨扫过的地方空气发灰发亮（和雨雾同一思路，颜色取自画面）
+            vec3 veil = mix(col, vec3(0.62, 0.68, 0.80), 0.45);
+            col = mix(col, veil, rf.y * 0.14 * min(uPrecipAmount, 1.0) * rainVis);
+            // 雨丝 = 背景提亮一档并偏冷，不是贴一条白线；闪电时整场雨被照亮
+            vec3 lifted = col * 1.18 + vec3(0.08, 0.09, 0.11) + vec3(0.12, 0.14, 0.18) * uFlash;
+            float vis = clamp(rain * uPrecipAmount * rainVis * 0.85 * (1.0 + 0.35 * uFlash), 0.0, 0.75);
+            col = mix(col, lifted, vis);
         }
     }
+#endif
 
     // 粒子与扫描线
     vec3 particleColor = mix(uParticleColor, uWeatherParticleColor, uWeatherParticleMix);

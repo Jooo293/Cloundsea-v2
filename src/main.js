@@ -3,6 +3,8 @@ import { CloudSeaRenderer } from "./scene/cloudsea.js";
 import { THEMES, THEME_ORDER } from "./themes/theme.js";
 import { WeatherSystem, WEATHER_PRESETS } from "./systems/weather.js";
 import { TrainSystem } from "./systems/train.js";
+import { CloudBurst } from "./systems/cloudburst.js";
+import { AudioSystem } from "./systems/audio.js";
 
 /**
  * M0–M6 入口：一块画布 + 一条时间轴 + 一个渲染器 + 天气系统。
@@ -17,6 +19,8 @@ import { TrainSystem } from "./systems/train.js";
  *   ?cloudscale=0.5|0.75|1           直接指定云层渲染倍率
  *   ?carve=N                         把"列车拨云"强度放大 N 倍（调试）
  *   ?flash=0.8                       强制闪电亮度（截雷暴用）
+ *   ?burst=2.8                       穿云演出停在第 N 秒（配合 freeze 截图）
+ *   ?audiotest=1                     自动初始化音频并跑一遍自检（无头环境用）
  */
 
 const params = new URLSearchParams(location.search);
@@ -65,6 +69,7 @@ function saveSettings() {
       theme: themeSelect.value,
       weather: weatherSelect.value,
       quality: qualitySelect.value,
+      muted: audio.muted,
     }));
   } catch {}
 }
@@ -89,7 +94,12 @@ else if (savedSettings.weather && WEATHER_PRESETS[savedSettings.weather]) weathe
 
 const weather = new WeatherSystem(weatherSelect.value);
 const forcedFlash = Number(params.get("flash") || 0) || 0;
+const isSilentMode = params.get("freeze") === "1" || Number(params.get("bench") || 0) > 0;
+const audio = new AudioSystem({ muted: !!savedSettings.muted });
 const train = new TrainSystem();
+const cloudBurst = new CloudBurst();
+const burstParam = params.get("burst");
+const burstButton = document.querySelector("#burst");
 
 // ?train=0.25,0.2 → 直接停在飞行姿态（截图/调试用）
 const trainParam = params.get("train");
@@ -149,6 +159,19 @@ const parallax = [0, 0];
 window.addEventListener("pointermove", (event) => {
   parallaxTarget[0] = (event.clientX / window.innerWidth) * 2 - 1;
   parallaxTarget[1] = (event.clientY / window.innerHeight) * 2 - 1;
+});
+
+// ---- 音频：第一次交互后解锁（自动播放限制） ----
+const unlockAudio = () => {
+  if (isSilentMode) return;
+  audio.start();
+  document.querySelector("#mute")?.setAttribute("aria-pressed", String(audio.muted));
+};
+window.addEventListener("pointerdown", unlockAudio, { once: true, capture: true });
+window.addEventListener("keydown", unlockAudio, { once: true, capture: true });
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) audio.suspend();
+  else audio.resume();
 });
 
 // ---- 列车操控 ----
@@ -231,6 +254,15 @@ function runBench(frames) {
   const pixel = new Uint8Array(4);
   const settle = () => gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
 
+  // 之前 bench 不走 frame()，天气从未上传——?weather=storm 量到的其实是晴天
+  pushWeather(weather.update(0));
+  renderer.setCloudTime(clock.elapsed);
+  renderer.setFlash(forcedFlash, weather.bolt);
+  if (burstParam !== null) {
+    cloudBurst.seek(Number(burstParam) || 0);
+    renderer.setBurst(cloudBurst.state(), [0.56, 0.33]);
+  }
+
   for (let i = 0; i < 3; i += 1) renderer.render(0, width, height); // 预热
   settle();
 
@@ -259,6 +291,26 @@ function runBench(frames) {
   });
 }
 
+function pushWeather(weatherNow) {
+  renderer.setWeather({
+    active: weather.isDefault ? 0 : 1,
+    brightness: weatherNow.brightness,
+    contrast: weatherNow.contrast,
+    saturation: weatherNow.saturation,
+    particleMul: weatherNow.particleMul,
+    particleDir: weatherNow.particleDir,
+    particleSpeed: weatherNow.particleSpeed,
+    particleDriftX: weatherNow.particleDriftX,
+    particleShape: weatherNow.particleShape,
+    particleSize: weatherNow.particleSize,
+    particleMix: weatherNow.particleMix,
+    particleColor: weatherNow.particleColor,
+    precipAmount: weatherNow.precipAmount,
+    mist: weatherNow.mist,
+    tornado: weatherNow.tornado,
+  });
+}
+
 function frame(now) {
   frameHandle = requestAnimationFrame(frame);
   const time = clock.advance(now);
@@ -281,25 +333,21 @@ function frame(now) {
   parallax[1] += (parallaxTarget[1] - parallax[1]) * 0.06;
   renderer.setParallax(parallax[0], parallax[1]);
   renderer.setCloudTime(cloudTime);
-  renderer.setWeather({
-    active: weather.isDefault ? 0 : 1,
-    brightness: weatherNow.brightness,
-    contrast: weatherNow.contrast,
-    saturation: weatherNow.saturation,
-    particleMul: weatherNow.particleMul,
-    particleDir: weatherNow.particleDir,
-    particleSpeed: weatherNow.particleSpeed,
-    particleDriftX: weatherNow.particleDriftX,
-    particleShape: weatherNow.particleShape,
-    particleSize: weatherNow.particleSize,
-    particleMix: weatherNow.particleMix,
-    particleColor: weatherNow.particleColor,
-    precipType: weatherNow.precipType,
-    precipAmount: weatherNow.precipAmount,
-    mist: weatherNow.mist,
-    tornado: weatherNow.tornado,
-  });
-  renderer.setFlash(forcedFlash > 0 ? forcedFlash : weather.flashIntensity(dt));
+  pushWeather(weatherNow);
+  const flash = forcedFlash > 0 ? forcedFlash : weather.flashIntensity(dt);
+  renderer.setFlash(flash, weather.bolt);
+
+  if (!isSilentMode) {
+    // 天气强度：wind 从 1（晴）到 3.2（雷暴）
+    const storm = Math.min(1, Math.max(0, (weatherNow.wind - 1) / 2.2));
+    audio.update({
+      weather: weatherSelect.value,
+      storm,
+      charge: train.charge,
+      mode: train.mode,
+      flash,
+    });
+  }
   // 列车：停手 1.2 秒后视为"没有输入"，10 秒无输入自动回轨
   if (now - lastPointerAt > 1200) pointerTarget = null;
   train.update(dt, pointerTarget, width / height);
@@ -311,6 +359,11 @@ function frame(now) {
     railFade: train.railFade,
   });
   renderer.setCarve(0.225 + train.offset.x, 0.315 + train.offset.y, 0.13);
+  // 穿云演出：?burst=N 时定格在第 N 秒；镜头焦点放在车头前方一点（第一人称看出去的方向）
+  if (burstParam !== null) cloudBurst.seek(Number(burstParam) || 0);
+  else cloudBurst.update(dt);
+  renderer.setBurst(cloudBurst.state(), [0.56 + train.offset.x, 0.33 + train.offset.y]);
+  burstButton.disabled = cloudBurst.active;
   updateTrainHud();
   renderer.render(time, width, height);
   const cost = performance.now() - started;
@@ -360,6 +413,20 @@ async function boot() {
 
   statusEl.hidden = true;
 
+  // 音频自检：绕过手势直接建图，跑一遍蓄力 / 起飞 / 雷声，把状态打到控制台
+  if (params.get("audiotest") === "1") {
+    audio.start();
+    audio.update({ weather: "storm", storm: 1, charge: 0.5, mode: "charging", flash: 0 });
+    audio.update({ weather: "storm", storm: 1, charge: 0, mode: "flying", flash: 0 });
+    audio.thunder(0.9);
+    const ctx = audio.ctx;
+    console.log("[audio] enabled=" + audio.enabled, "state=" + (ctx ? ctx.state : "none"), "rate=" + (ctx ? ctx.sampleRate : 0));
+    // 离线渲染一遍同一套图，量 RMS —— 无头环境没有声卡，实时 Analyser 读不到
+    AudioSystem.renderTest(1.2)
+      .then((result) => console.log("[audio] offline " + JSON.stringify(result)))
+      .catch((err) => console.log("[audio] offline failed: " + (err && err.message ? err.message : err)));
+  }
+
   const benchFrames = Number(params.get("bench") || 0) || 0;
   if (benchFrames > 0) {
     runBench(benchFrames);
@@ -378,6 +445,24 @@ function fail(error) {
 
 pauseButton.addEventListener("click", togglePause);
 resetButton.addEventListener("click", reset);
+burstButton.addEventListener("click", () => cloudBurst.start());
+// 按钮在 #stage 里：别让这次点击被当成"长按蓄力"
+burstButton.addEventListener("pointerdown", (event) => event.stopPropagation());
+// 整个 HUD 都不该触发"长按蓄力"（否则点静音 / 暂停会顺带蓄力）
+document.querySelector("#hud").addEventListener("pointerdown", (event) => event.stopPropagation());
+
+const muteButton = document.querySelector("#mute");
+function syncMuteLabel() {
+  if (!muteButton) return;
+  muteButton.textContent = audio.muted ? "静音" : "声音";
+  muteButton.setAttribute("aria-pressed", String(audio.muted));
+}
+muteButton?.addEventListener("click", () => {
+  audio.setMuted(!audio.muted);
+  syncMuteLabel();
+  saveSettings();
+});
+syncMuteLabel();
 qualitySelect.addEventListener("change", () => {
   const { width, height } = targetSize();
   canvas.width = width;
@@ -407,6 +492,12 @@ document.addEventListener("keydown", (event) => {
   if (event.code === "Space") {
     event.preventDefault();
     togglePause();
+  } else if (event.key.toLowerCase() === "m") {
+    audio.setMuted(!audio.muted);
+    syncMuteLabel();
+    saveSettings();
+  } else if (event.key.toLowerCase() === "c") {
+    cloudBurst.start();
   } else if (event.key.toLowerCase() === "r") {
     reset();
   } else if (event.key.toLowerCase() === "f") {

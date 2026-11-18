@@ -1,11 +1,9 @@
 /**
  * 天气系统（M10 改版）
  *
- * 四种天气：
+ * 两种天气（M22 起去掉了大雨 / 大雪）：
  *   晴    —— 原样，微风
- *   大雨  —— 压暗、去饱和、雨丝下落、风变大
- *   大雪  —— 冷白、雪片慢速下落、能见度下降
- *   雷暴  —— 飓风级风速 + 闪电，最暗
+ *   雷暴  —— 暴雨 + 飓风级风速 + 闪电 + 龙卷，最暗
  *
  * 每个天气是一组命名参数，切换时用 smoothstep 在 8 秒内插值。
  */
@@ -27,51 +25,8 @@ export const WEATHER_PRESETS = {
     particleMix: 0.0, // 0 = 用主题自带的粒子颜色
     particleColor: [1, 1, 1],
     flashRate: 0,
-    precipType: 0, // 0 无 / 1 雨 / 2 雪
-    precipAmount: 0,
+    precipAmount: 0, // 雨量（只有雷暴下雨）
     mist: 0.0,
-    tornado: 0,
-  },
-  rain: {
-    id: "rain",
-    name: "大雨",
-    brightness: 0.78,
-    contrast: 1.05,
-    saturation: 0.82,
-    wind: 1.6,
-    particleMul: 2.4,
-    particleSpeed: 3.4,
-    particleDir: -1,
-    particleDriftX: 1.2,
-    particleShape: 0.0,
-    particleSize: 0.85,
-    particleMix: 1.0,
-    particleColor: [0.62, 0.82, 1.0],
-    flashRate: 0,
-    precipType: 1,
-    precipAmount: 1.25,
-    mist: 0.22,
-    tornado: 0,
-  },
-  snow: {
-    id: "snow",
-    name: "大雪",
-    brightness: 1.06,
-    contrast: 0.92,
-    saturation: 0.55,
-    wind: 0.8,
-    particleMul: 2.0,
-    particleSpeed: 0.35,
-    particleDir: -1,
-    particleDriftX: 0.55,
-    particleShape: 1.0,
-    particleSize: 1.7,
-    particleMix: 1.0,
-    particleColor: [0.96, 0.99, 1.0],
-    flashRate: 0,
-    precipType: 2,
-    precipAmount: 1.0,
-    mist: 0.35,
     tornado: 0,
   },
   storm: {
@@ -81,7 +36,7 @@ export const WEATHER_PRESETS = {
     contrast: 1.18,
     saturation: 0.66,
     wind: 3.2, // 飓风
-    particleMul: 3.0,
+    particleMul: 0.0,
     particleSpeed: 4.2,
     particleDir: -1,
     particleDriftX: 3.4,
@@ -90,7 +45,6 @@ export const WEATHER_PRESETS = {
     particleMix: 1.0,
     particleColor: [0.72, 0.86, 1.0],
     flashRate: 3.0,
-    precipType: 1,
     precipAmount: 1.35,
     mist: 0.42,
     tornado: 1.0,
@@ -110,7 +64,6 @@ const NUMERIC = [
   "particleSize",
   "particleMix",
   "flashRate",
-  "precipType",
   "precipAmount",
   "mist",
   "tornado",
@@ -128,6 +81,16 @@ export class WeatherSystem {
     this.from = { ...this.current, particleColor: [...this.current.particleColor] };
     this.progress = 1;
     this.nextFlashIn = this.#rollNextFlash();
+    // 每次落雷重新掷一次：落点（屏幕横向比例）/ 形状种子 / 是否有可见电弧（否则只是云内闪光）
+    this.bolt = { x: 0.32, seed: 3.0, visible: 1 };
+  }
+
+  #rollBolt() {
+    this.bolt = {
+      x: 0.15 + Math.random() * 0.7,
+      seed: Math.floor(Math.random() * 97) + 1,
+      visible: Math.random() < 0.7 ? 1 : 0,
+    };
   }
 
   #rollNextFlash() {
@@ -177,6 +140,7 @@ export class WeatherSystem {
     if (this.nextFlashIn <= 0) {
       this.nextFlashIn = -Math.log(1 - Math.random()) / rate;
       this.flashAge = 0;
+      this.#rollBolt(); // 回闪（echo）沿用同一条通道，和真实闪电一致
     }
     if (this.flashAge === undefined) return 0;
     this.flashAge += dt;
