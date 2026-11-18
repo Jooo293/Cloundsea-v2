@@ -28,6 +28,7 @@ uniform float uWeatherParticleMix;
 uniform vec3 uWeatherParticleColor;
 
 // 降水与龙卷
+uniform float uFlash;        // 闪电强度，用来照亮雨丝
 uniform float uPrecipType;   // 0 无 / 1 雨 / 2 雪
 uniform float uPrecipAmount;
 uniform float uWindSlant;
@@ -266,7 +267,8 @@ void mainImage( out vec4 fragColor, in vec2 fragCoord )
         if (uPrecipType > 1.5) {
             float snow = snowField(uv, iTime);
             float snowVis = mix(1.0, 0.70, fg.a) * mix(0.80, 1.0, 1.0 - cloudTexel.a);
-            col = mix(col, vec3(0.97, 0.99, 1.0), clamp(snow * uPrecipAmount * snowVis * 0.9, 0.0, 0.9));
+            vec3 snowTint = vec3(0.97, 0.99, 1.0) + vec3(0.5, 0.6, 0.8) * uFlash;
+            col = mix(col, snowTint, clamp(snow * uPrecipAmount * snowVis * 0.9, 0.0, 0.9));
         } else {
             float rain = rainField(uv, iTime, uWindSlant);
             // 雨色采样背景：60% 揉进当前画面，再按背景亮度提亮，避免"浮在最上层的白条"
@@ -275,8 +277,11 @@ void mainImage( out vec4 fragColor, in vec2 fragCoord )
             // 遮挡：前景雾挡掉大部分雨；天空缝隙里雨更清楚
             float rainVis = mix(1.0, 0.55, fg.a) * mix(0.70, 1.0, 1.0 - cloudTexel.a);
             float vis = clamp(rain * uPrecipAmount * rainVis * (0.80 + 0.60 * lum), 0.0, 0.9);
+            // 闪电瞬间：雨色更亮、雨丝自身也发光
+            rainTint += vec3(0.90, 0.95, 1.0) * uFlash * 0.55;
+            vis = clamp(vis * (1.0 + 0.55 * uFlash), 0.0, 0.95);
             col = mix(col, rainTint, vis);
-            col += rain * 0.09 * (0.35 + lum);
+            col += rain * 0.09 * (0.35 + lum) * (1.0 + 1.6 * uFlash);
         }
     }
 

@@ -49,7 +49,8 @@ void mainImage( out vec4 fragColor, in vec2 fragCoord )
         col += uPaper * 0.015;
     }
 
-    col *= vignetteFactor(uv);
+    // 闪电瞬间暗角收缩：画面边缘跟着亮起来
+    col *= mix(vignetteFactor(uv), 1.0, uFlash * 0.55);
 
     // 闪电：曝光 + 电弧本体（雷暴天气才非 0）
     if (uFlash > 0.001) {

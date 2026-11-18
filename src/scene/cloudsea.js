@@ -59,7 +59,7 @@ const COMPOSITE_UNIFORMS = [
   "uParticleColor", "uParticleDensity", "uParticleSpeed", "uWeatherParticleMul", "uParticleDir",
   "uWeatherParticleSpeed", "uWeatherParticleDriftX", "uWeatherParticleShape", "uWeatherParticleSize",
   "uWeatherParticleMix", "uWeatherParticleColor",
-  "uPrecipType", "uPrecipAmount", "uWindSlant", "uTornado", "uTornadoPos",
+  "uPrecipType", "uPrecipAmount", "uWindSlant", "uTornado", "uTornadoPos", "uFlash",
   "uParallax", "uScanline", "uTrainOffset", "uTrainScale", "uSmokeFade", "uRailFade",
   "uTrainGrain", "uCraneEnabled", "uCraneColor",
   "uSnowCover", "uSnowColor",
