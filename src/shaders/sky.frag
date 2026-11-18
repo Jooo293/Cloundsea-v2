@@ -40,6 +40,9 @@ uniform float uContrast;
 uniform float uSaturation;
 uniform float uCloudTime;
 
+// 雨雾：低频薄雾，营造空气湿度
+uniform float uMist;
+
 // 龙卷：把云层采样绕涡心拧起来
 uniform float uTornado;
 uniform vec2 uTornadoPos;
@@ -205,6 +208,15 @@ void mainImage( out vec4 fragColor, in vec2 fragCoord )
         e *= smoothstep(0.45, 0.80, lum);
         float twinkle = 0.70 + 0.30 * sin(t * 2.0 + uv.x * 40.0);
         col += uIceColor * e * uIceStrength * twinkle;
+    }
+
+    // 雨雾：两层低频噪声，缓慢横向流动，随高度略增（贴近云顶更浓）
+    if (uMist > 0.001) {
+        vec2 mp = vec2(uv.x * 2.2 + t * 0.02, uv.y * 1.4 + t * 0.01);
+        float m = fbm(mp, 4) * 0.6 + fbm(mp * 2.7 + 11.0, 3) * 0.4;
+        float band = smoothstep(0.22, 0.78, m) * (0.55 + 0.45 * smoothstep(0.0, 0.9, uv.y));
+        vec3 mistColor = mix(col, vec3(0.72, 0.78, 0.86), 0.55);
+        col = mix(col, mistColor, band * uMist);
     }
 
     // 积墨：用颜色梯度找云带边缘，再用低频噪声做飞白（断续的干笔）

@@ -296,6 +296,7 @@ function frame(now) {
     particleColor: weatherNow.particleColor,
     precipType: weatherNow.precipType,
     precipAmount: weatherNow.precipAmount,
+    mist: weatherNow.mist,
     tornado: weatherNow.tornado,
   });
   renderer.setFlash(forcedFlash > 0 ? forcedFlash : weather.flashIntensity(dt));

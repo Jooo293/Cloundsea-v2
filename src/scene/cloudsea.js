@@ -41,7 +41,7 @@ const SKY_UNIFORMS = [
   "uAuroraEnabled", "uAuroraStrength", "uAuroraColor",
   "uIceEnabled", "uIceStrength", "uIceScale", "uIceColor",
   "uWarp", "uRidge", "uCarvePos", "uCarveRadius", "uCarveDepth",
-  "uWeatherActive", "uBrightness", "uContrast", "uSaturation", "uCloudTime",
+  "uWeatherActive", "uBrightness", "uContrast", "uSaturation", "uCloudTime", "uMist",
   "uTornado", "uTornadoPos",
 ];
 
@@ -140,7 +140,7 @@ export class CloudSeaRenderer {
     this.weather = {
       active: 0, brightness: 1, contrast: 1, saturation: 1,
       particleMul: 1, particleDir: 1, particleSpeed: 1, particleDriftX: 0, particleShape: 0, particleSize: 1, particleMix: 0,
-      precipType: 0, precipAmount: 0, tornado: 0,
+      precipType: 0, precipAmount: 0, mist: 0, tornado: 0,
       particleColor: [1, 1, 1],
     };
     this.cloudTime = 0;
@@ -273,6 +273,7 @@ export class CloudSeaRenderer {
     this.weather.particleColor = weather.particleColor || [1, 1, 1];
     this.weather.precipType = weather.precipType ?? 0;
     this.weather.precipAmount = weather.precipAmount ?? 0;
+    this.weather.mist = weather.mist ?? 0;
     this.weather.tornado = weather.tornado ?? 0;
   }
 
@@ -394,6 +395,10 @@ export class CloudSeaRenderer {
 
     if (pass.uniforms.uCloudTime) {
       gl.uniform1f(pass.uniforms.uCloudTime, this.cloudTime);
+    }
+
+    if (pass.uniforms.uMist) {
+      gl.uniform1f(pass.uniforms.uMist, this.weather.mist);
     }
 
     if (pass.uniforms.uWeatherActive) {

@@ -1,2 +1,2 @@
-{"frames":60,"avgMs":9.32,"width":1920,"height":1080,"quality":1,"dpr":1,"theme":"cyber","weather":"rain","renderer":"ANGLE (Intel, Intel(R) Arc(TM) Graphics (0x00007D55) Direct3D11 vs_5_0 ps_5_0, D3D11)"}
-{"frames":60,"avgMs":8.27,"width":1920,"height":1080,"quality":1,"dpr":1,"theme":"cyber","weather":"snow","renderer":"ANGLE (Intel, Intel(R) Arc(TM) Graphics (0x00007D55) Direct3D11 vs_5_0 ps_5_0, D3D11)"}
+{"frames":60,"avgMs":8.84,"width":1920,"height":1080,"quality":1,"dpr":1,"theme":"cyber","weather":"storm","renderer":"ANGLE (Intel, Intel(R) Arc(TM) Graphics (0x00007D55) Direct3D11 vs_5_0 ps_5_0, D3D11)"}
+{"frames":60,"avgMs":8.42,"width":1920,"height":1080,"quality":1,"dpr":1,"theme":"cyber","weather":"rain","renderer":"ANGLE (Intel, Intel(R) Arc(TM) Graphics (0x00007D55) Direct3D11 vs_5_0 ps_5_0, D3D11)"}

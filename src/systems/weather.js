@@ -29,6 +29,7 @@ export const WEATHER_PRESETS = {
     flashRate: 0,
     precipType: 0, // 0 无 / 1 雨 / 2 雪
     precipAmount: 0,
+    mist: 0.0,
     tornado: 0,
   },
   rain: {
@@ -49,6 +50,7 @@ export const WEATHER_PRESETS = {
     flashRate: 0,
     precipType: 1,
     precipAmount: 1.25,
+    mist: 0.22,
     tornado: 0,
   },
   snow: {
@@ -69,6 +71,7 @@ export const WEATHER_PRESETS = {
     flashRate: 0,
     precipType: 2,
     precipAmount: 1.0,
+    mist: 0.35,
     tornado: 0,
   },
   storm: {
@@ -89,6 +92,7 @@ export const WEATHER_PRESETS = {
     flashRate: 3.0,
     precipType: 1,
     precipAmount: 1.35,
+    mist: 0.42,
     tornado: 1.0,
   },
 };
@@ -108,6 +112,7 @@ const NUMERIC = [
   "flashRate",
   "precipType",
   "precipAmount",
+  "mist",
   "tornado",
 ];
 const smoothstep = (t) => t * t * (3 - 2 * t);
