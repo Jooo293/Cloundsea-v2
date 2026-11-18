@@ -145,7 +145,7 @@ float snowField(vec2 uv, float t) {
 float tornadoBody(vec2 uv, vec2 c, float t) {
     vec2 p = uv - c;
     float hgt = clamp(p.y / 0.58, 0.0, 1.0);
-    float width = 0.026 + 0.125 * pow(hgt, 1.6);
+    float width = 0.024 + 0.155 * pow(hgt, 1.9);   // 底部窄、顶部张开成喇叭口
     float sway = 0.035 * sin(p.y * 6.0 + t * 1.4);
     float x = abs(p.x - sway);
     float body = smoothstep(width, width * 0.5, x);
@@ -205,8 +205,17 @@ void mainImage( out vec4 fragColor, in vec2 fragCoord )
     vec4 cloudTexel = texture(iChannel0, fragCoord / iResolution.xy);
     vec3 col = cloudTexel.rgb;
 
-    // 龙卷：亮灰螺旋柱 + 边缘高光 + 附近压暗（吸走光）
+    // 龙卷：亮灰螺旋柱 + 外围螺旋云臂 + 边缘高光 + 附近压暗
     if (uTornado > 0.001) {
+        // 云臂（很淡的灰度带，绕漏斗向外卷）
+        vec2 ap = (uv - uTornadoPos) * vec2(0.8, 1.0);
+        float ar = length(ap) + 1e-4;
+        float aa = atan(ap.y, ap.x);
+        float armPhase = aa * 3.0 + ar * 18.0 - iTime * 1.3;
+        float armBand = smoothstep(0.55, 0.0, abs(sin(armPhase)));
+        float armMask = smoothstep(0.26, 0.34, ar) * smoothstep(0.70, 0.44, ar);
+        col = mix(col, vec3(0.60, 0.58, 0.63), armBand * armMask * 0.16 * uTornado);
+
         float f = tornadoBody(uv, uTornadoPos, iTime);
         vec3 tornadoColor = vec3(0.74, 0.72, 0.78);
         col = mix(col, tornadoColor, f * 0.88 * uTornado);

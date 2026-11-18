@@ -189,13 +189,19 @@ void mainImage( out vec4 fragColor, in vec2 fragCoord )
         warpOffset = vec2(wa - 0.5, wb - 0.5) * uWarp;
     }
 
-    // 龙卷挖空：每帧每像素只算一次，循环里只加一个标量
+    // 龙卷：中心挖空 + 边缘抬升 + 外围螺旋云臂
     float carveDelta = 0.0;
     if (uTornado > 0.001) {
         vec2 td = (uv - uTornadoPos) * vec2(0.80, 1.0);
-        float tr = length(td);
-        carveDelta = -smoothstep(0.26, 0.0, tr) * 1.45 * uTornado
-                   + exp(-pow((tr - 0.27) * 8.0, 2.0)) * 0.38 * uTornado;
+        float tr = length(td) + 1e-4;
+        float hole = -smoothstep(0.26, 0.0, tr) * 1.45;
+        float rim = exp(-pow((tr - 0.27) * 8.0, 2.0)) * 0.38;
+        // 云臂：角度 + 半径的螺旋相位，随时间旋转；越靠外越弱
+        float ang = atan(td.y, td.x);
+        float phase = ang * 3.0 + tr * 22.0 - t * 1.4;
+        float arms = sin(phase) * 0.5;
+        float armMask = smoothstep(0.24, 0.34, tr) * smoothstep(0.78, 0.46, tr);
+        carveDelta = (hole + rim + arms * armMask * 0.52) * uTornado;
     }
 
     vec4 bg = background(uv, t, warpOffset, carveDelta);
