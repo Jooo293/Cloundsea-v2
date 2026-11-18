@@ -89,21 +89,35 @@ vec3 cityComposite(vec3 col, vec2 uv) {
     return outCol;
 }
 
-// 暴雨：三层不同速度/斜率的雨丝
+// 暴雨：三层，彼此的速度/斜率/透明度不同；每条雨丝长度随机、头尾渐隐、带微弱风噪
 float rainField(vec2 uv, float t, float slant) {
     float acc = 0.0;
     for (int i = 0; i < 3; i++) {
         float k = float(i);
         float cells = 26.0 * (1.0 + k * 0.55);
+        float layerSlant = slant * (0.55 + k * 0.55);   // 每层角度不同，避免平行雨幕
         vec2 p = vec2(uv.x * cells + t * slant * (0.35 + k * 0.45),
                       uv.y * cells * 0.5 - t * (9.0 + k * 7.0));
         vec2 cell = floor(p);
         vec2 f = fract(p) - 0.5;
+
         float h = hash21(cell + k * 7.0);
-        float alive = step(0.62, h);
-        float streak = smoothstep(0.055, 0.0, abs(f.x + f.y * slant * 0.18))
-                     * smoothstep(0.5, 0.15, abs(f.y));
-        acc += alive * streak * (0.62 - k * 0.14);
+        float h2 = hash21(cell + k * 7.0 + 11.3);
+        float alive = step(0.42, h);
+
+        // 长短随机：40%–100% 个单元高，位置在单元内随机
+        float len = 0.40 + 0.60 * h2;
+        float yc = (h2 - 0.5) * (1.0 - len);
+        float ly = (f.y - yc) / len;              // -0.5（尾）… +0.5（头）
+        float along = 1.0 - abs(ly) * 2.0;        // 两端 0，中间 1
+        float taper = smoothstep(0.0, 0.22, along); // 头尾渐隐，不是硬白条
+
+        // 阵风：逐条雨丝的水平扰动，随时间缓变
+        float wobble = sin(t * 1.7 + h * 24.0) * 0.018;
+        float across = abs(f.x + wobble - ly * len * layerSlant * 0.22);
+        float streak = smoothstep(0.055, 0.0, across) * taper;
+
+        acc += alive * streak * (0.62 - k * 0.14) * (0.55 + 0.45 * h2);
     }
     return acc;
 }
@@ -253,7 +267,12 @@ void mainImage( out vec4 fragColor, in vec2 fragCoord )
             col = mix(col, vec3(0.97, 0.99, 1.0), clamp(snow * uPrecipAmount * 0.9, 0.0, 0.9));
         } else {
             float rain = rainField(uv, iTime, uWindSlant);
-            col = mix(col, vec3(0.70, 0.84, 0.98), clamp(rain * uPrecipAmount * 0.85, 0.0, 0.85));
+            // 雨色采样背景：60% 揉进当前画面，再按背景亮度提亮，避免"浮在最上层的白条"
+            vec3 rainTint = mix(vec3(0.80, 0.88, 0.98), col * 1.35 + 0.02, 0.45);
+            float lum = dot(col, vec3(0.299, 0.587, 0.114));
+            float vis = clamp(rain * uPrecipAmount * (0.80 + 0.60 * lum), 0.0, 0.9);
+            col = mix(col, rainTint, vis);
+            col += rain * 0.09 * (0.35 + lum);
         }
     }
 

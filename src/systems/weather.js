@@ -48,7 +48,7 @@ export const WEATHER_PRESETS = {
     particleColor: [0.62, 0.82, 1.0],
     flashRate: 0,
     precipType: 1,
-    precipAmount: 1.0,
+    precipAmount: 1.25,
     tornado: 0,
   },
   snow: {
