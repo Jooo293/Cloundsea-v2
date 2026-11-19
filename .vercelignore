@@ -1,0 +1,9 @@
+# 只上传运行所需的文件，截图 / 文档 / 工具不进部署包
+shots/
+docs/
+tools/
+dist/
+README.md
+CLAUDE.md
+AGENTS.md
+.gitignore
