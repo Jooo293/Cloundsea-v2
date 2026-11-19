@@ -67,6 +67,7 @@ function saveSettings() {
       theme: themeSelect.value,
       weather: weatherSelect.value,
       quality: qualitySelect.value,
+      music: musicOn,
     }));
   } catch {}
 }
@@ -407,6 +408,43 @@ burstButton.addEventListener("click", () => cloudBurst.start());
 burstButton.addEventListener("pointerdown", (event) => event.stopPropagation());
 // 整个 HUD 都不该触发"长按蓄力"（否则点暂停会顺带蓄力）
 document.querySelector("#hud").addEventListener("pointerdown", (event) => event.stopPropagation());
+
+// ---- 背景音乐：用户提供的 BGM，受自动播放限制，首次交互后才开始 ----
+const bgmEl = document.querySelector("#bgm");
+const musicButton = document.querySelector("#music");
+const isFrozenMode = params.get("freeze") === "1" || Number(params.get("bench") || 0) > 0;
+let musicOn = savedSettings.music !== false && params.get("music") !== "0";
+
+function syncMusicLabel() {
+  if (!musicButton) return;
+  musicButton.textContent = musicOn ? "音乐" : "静音";
+  musicButton.setAttribute("aria-pressed", String(musicOn));
+}
+
+function playBgm() {
+  if (!musicOn || isFrozenMode || !bgmEl) return;
+  bgmEl.volume = 0.5;
+  bgmEl.play().catch(() => {});
+}
+
+window.addEventListener("pointerdown", playBgm, { once: true, capture: true });
+window.addEventListener("keydown", playBgm, { once: true, capture: true });
+
+musicButton?.addEventListener("click", () => {
+  musicOn = !musicOn;
+  if (musicOn) playBgm();
+  else bgmEl?.pause();
+  syncMusicLabel();
+  saveSettings();
+});
+
+document.addEventListener("visibilitychange", () => {
+  if (!bgmEl) return;
+  if (document.hidden) bgmEl.pause();
+  else if (musicOn) playBgm();
+});
+
+syncMusicLabel();
 
 qualitySelect.addEventListener("change", () => {
   const { width, height } = targetSize();

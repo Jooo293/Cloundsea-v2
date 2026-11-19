@@ -85,5 +85,15 @@ fs.mkdirSync(dist, { recursive: true });
 const outFile = path.join(dist, "cloudsea.html");
 fs.writeFileSync(outFile, html);
 
+// 音频等静态资源：单文件版放在 dist/assets/ 下，和 index.html 一样的相对路径
+const audioDir = path.join(root, "assets", "audio");
+if (fs.existsSync(audioDir)) {
+  const target = path.join(dist, "assets", "audio");
+  fs.mkdirSync(target, { recursive: true });
+  for (const name of fs.readdirSync(audioDir)) {
+    fs.copyFileSync(path.join(audioDir, name), path.join(target, name));
+  }
+}
+
 const kb = (fs.statSync(outFile).size / 1024).toFixed(0);
 console.log(`✓ ${path.relative(root, outFile)}  ${kb} KB  （模块 ${order.length} 个，着色器 ${Object.keys(shaders).length} 个）`);

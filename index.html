@@ -28,6 +28,7 @@
         <button id="pause" type="button" aria-pressed="false">暂停</button>
         <button id="reset" type="button">重置</button>
         <button id="burst" type="button" title="快捷键 C">穿云</button>
+        <button id="music" type="button" aria-pressed="true" title="背景音乐">音乐</button>
         <label>主题
           <select id="theme" aria-label="主题皮肤"></select>
         </label>
@@ -53,6 +54,8 @@
         <span id="time">00:00</span>
         <span id="fps" aria-live="off">-- fps</span>
       </div>
+
+      <audio id="bgm" src="assets/audio/bgm.mp3" loop preload="none"></audio>
 
       <div id="bench" hidden></div>
     </section>

@@ -1,6 +1,6 @@
 # CLAUDE.md — 给 AI 编码助手的项目手册
 
-> 你正在接手一个已经迭代到 M27 的单页 WebGL 作品。先读完这份文件再动手。
+> 你正在接手一个已经迭代到 M28 的单页 WebGL 作品。先读完这份文件再动手。
 > 文件名沿用 Claude Code 的约定，内容对任何 AI 编码助手（DeepSeek 等）通用；根目录的 `AGENTS.md` 是同一份规则的精简入口。
 > 人类协作者看 `README.md`；变更历史看 `docs/开发日志.md`；每个里程碑的技术细节看 `docs/bench/m*.md`。
 
@@ -8,6 +8,7 @@
 
 《云海 2.0》：从《云海拾句》剥离出来的单场景云海，去掉全部诗句，重做成可玩的世界。
 四套主题（原版暖霞 / 赛博霓虹 / 废墟 / 极地）、液态云、两种天气（晴 / 雷暴；大雨、大雪已在 M22 按用户要求移除）、可操控列车。
+音轨只有一条用户提供的背景音乐（`assets/audio/bgm.mp3`，M28）；程序化音效已在 M27 移除。
 纯原生 WebGL2 + ES 模块，无框架、无构建依赖、无 npm 安装。
 
 ## 2. 三条命令
@@ -31,7 +32,7 @@ Windows 上浏览器是 Edge：`C:\Program Files (x86)\Microsoft\Edge\Applicatio
 ## 3. 架构地图
 
 ```
-index.html            DOM 骨架 + HUD（主题 / 天气 / 画质 / 速度 / 暂停）
+index.html            DOM 骨架 + HUD（主题 / 天气 / 画质 / 速度 / 暂停 / 音乐）+ <audio> BGM
 src/main.js           装配层：时间轴、渲染循环、天气、列车、HUD、bench
 src/engine/gl.js      program 编译、全屏三角形、噪声纹理
 src/engine/fbo.js     离屏渲染目标
@@ -64,7 +65,7 @@ tools/bench-server.py        bench 结果收集器（页面 POST 到 127.0.0.1:8
 2. **性能门禁**：1080p、默认云倍率（0.75）下 ≤ 12 ms（Intel Arc 核显基准）。超了先降云倍率，而不是砍功能。
 3. **源码是 UTF-8**。**不要**用 PowerShell 的 `Set-Content` / `Add-Content` / `Out-File` 批量改 `.js/.glsl/.html/.md`——曾经因为编码把整个 `main.js` 写坏、页面直接 SyntaxError。用编辑器或 Python（`open(..., encoding="utf-8")`）。
 4. `dist/cloudsea.html` 是**生成物**：改完源码必须重跑 `node tools/build-singlefile.mjs`，不要手改 dist。
-5. 不要恢复**已移除**的功能（乘客视角、大雨 / 大雪天气、神龙 / 云海巨鲸伴飞、音频均已按用户要求删除）；不要重新引入诗词/工作台。
+5. 不要恢复**已移除**的功能（乘客视角、大雨 / 大雪天气、神龙 / 云海巨鲸伴飞、程序化音效均已按用户要求删除；只保留 M28 的用户 BGM）；不要重新引入诗词/工作台。
 
 ## 5. 加东西的标准流程
 
